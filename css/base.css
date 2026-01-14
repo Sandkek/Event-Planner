@@ -1,0 +1,82 @@
+/* base.css */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: #f9fafb;
+  margin: 0;
+}
+
+.app-navbar {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  background-color: #ffffff !important;
+  padding: 0.75rem 0 !important;
+}
+
+.navbar-brand {
+  font-weight: 700;
+  color: #4361ee !important;
+  font-size: 1.4rem;
+  text-decoration: none !important;
+}
+
+.user-info {
+  font-size: 0.95rem;
+  color: #495057;
+}
+
+.btn-logout {
+  font-size: 0.875rem;
+  padding: 0.25rem 0.75rem;
+}
+
+/* Выпадающее меню */
+/* Аватар пользователя */
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: #4361ee;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+/* Имя пользователя */
+.user-info {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #212529;
+  transition: color 0.2s;
+}
+
+.user-info:hover {
+  color: #4361ee !important;
+}
+
+/* Выпадающее меню — без изменений */
+.dropdown-toggle::after {
+  display: none;
+}
+
+.dropdown-menu {
+  min-width: 180px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+
+.dropdown-item {
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+}
+
+.dropdown-item:hover {
+  background-color: #f8f9fa;
+}
+
+.dropdown-item.text-danger:hover {
+  background-color: #fff5f5;
+  color: #dc3545 !important;
+}

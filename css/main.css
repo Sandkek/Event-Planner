@@ -1,0 +1,135 @@
+/* main.css */
+.hero {
+  background: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%);
+  color: white;
+  padding: 4rem 1rem;
+  text-align: center;
+}
+
+.hero h1 {
+  font-weight: 800;
+  font-size: 2.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.search-container {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.search-container .form-control {
+  height: 56px;
+  font-size: 1.1rem;
+  border-radius: 30px;
+  padding-left: 24px;
+}
+
+.container .form-select {
+  height: 48px;
+  padding: 0 1rem;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  font-size: 0.95rem;
+}
+
+.filters select, .filters input {
+  height: 48px;
+  padding: 0 1rem;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+}
+
+.events-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+  padding: 0 1rem 2rem;
+}
+
+.event-card {
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transition: transform 0.2s;
+}
+
+.event-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+}
+
+.event-image {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  background-color: #e9ecef;
+}
+
+.event-content {
+  padding: 1.25rem;
+}
+
+.event-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: #111;
+}
+
+.event-meta {
+  color: #6c757d;
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+.event-description {
+  color: #495057;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.btn-rsvp {
+  width: 100%;
+  background-color: #4361ee;
+  border: none;
+  color: white;
+  padding: 0.6rem;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: background-color 0.2s;
+}
+
+.btn-rsvp:hover {
+  background-color: #3a56d4;
+}
+
+#createEventBtn {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  font-weight: 600;
+  padding: 0.5rem 1.25rem;
+  border-radius: 30px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+#createEventBtn:hover {
+  background-color: white;
+  color: #4361ee;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+@media (max-width: 576px) {
+  .hero h1 { font-size: 1.75rem; }
+  .container .form-select {
+    min-width: 140px !important;
+    height: 44px;
+    font-size: 0.9rem;
+  }
+  .filters select, .filters input { height: 44px; font-size: 0.95rem; }
+}
