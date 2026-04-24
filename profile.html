@@ -13,20 +13,19 @@
   <link rel="stylesheet" href="css/profile.css" />
 
   <script src="js/navbar.js"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      if (typeof loadNavbar === 'function') {
-        loadNavbar();
-      }
-    });
   </script>  
 </head>
 <body>
   <div class="container mt-4">
-    <div class="profile-header mb-4">
-      <h1 id="profileName">Мой профиль</h1>
-      <p class="text-muted">Управляйте своими мероприятиями и участием</p>
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+      <div>
+        <h1 id="profileName">Мой профиль</h1>
+        <p class="text-muted mb-0">Управляйте своими мероприятиями и участием</p>
+      </div>
+      <a href="calendar.html" class="btn btn-outline-primary">Открыть календарь</a>
     </div>
+
+    <div id="profileRemindersContainer" class="mb-4"></div>
 
     <!-- Вкладки -->
     <ul class="nav nav-tabs" id="profileTabs" role="tablist">
@@ -62,6 +61,6 @@
 
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/profile.js"></script>
+  <script type="module" src="js/pages/profile.js"></script>
 </body>
 </html>

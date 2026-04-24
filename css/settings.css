@@ -1,0 +1,36 @@
+body {
+  background-color: #f9fafb;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.settings-header h1 {
+  font-weight: 700;
+  color: #4361ee;
+}
+
+.settings-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  padding: 1.5rem;
+  height: 100%;
+}
+
+.settings-card-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 1.25rem;
+  color: #212529;
+}
+
+.form-check-input:checked {
+  background-color: #4361ee;
+  border-color: #4361ee;
+}

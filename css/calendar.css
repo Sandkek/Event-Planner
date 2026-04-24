@@ -1,0 +1,92 @@
+body {
+  background-color: #f9fafb;
+}
+
+.calendar-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.calendar-page-header h1 {
+  font-weight: 700;
+  color: #4361ee;
+}
+
+.calendar-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  padding: 1rem;
+}
+
+.calendar-filters {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr auto;
+  gap: 1rem;
+  align-items: end;
+}
+
+.calendar-filter-actions {
+  display: flex;
+  align-items: end;
+}
+
+#calendar {
+  min-height: 700px;
+}
+
+.fc .fc-toolbar-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.fc .fc-button {
+  border-radius: 8px;
+}
+
+.fc .fc-daygrid-event,
+.fc .fc-timegrid-event {
+  border-radius: 8px;
+  padding: 2px 4px;
+}
+
+.fc .fc-list-event:hover td,
+.fc .fc-daygrid-day:hover {
+  background-color: #f8f9fa;
+}
+
+@media (max-width: 768px) {
+  .calendar-card {
+    padding: 0.5rem;
+  }
+
+  .calendar-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-filter-actions {
+    display: block;
+  }
+
+  .calendar-filter-actions .btn {
+    width: 100%;
+  }
+
+  #calendar {
+    min-height: 600px;
+  }
+
+  .fc .fc-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .fc .fc-toolbar-title {
+    font-size: 1.15rem;
+    text-align: center;
+  }
+}

@@ -12,14 +12,7 @@
   <link rel="stylesheet" href="css/base.css" />
   <link rel="stylesheet" href="css/create-event.css" />
 
-  <script src="js/navbar.js"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      if (typeof loadNavbar === 'function') {
-        loadNavbar();
-      }
-    });
-  </script>  
+  <script src="js/navbar.js"></script>  
 </head>
 <body>
   <div class="container">
@@ -63,6 +56,34 @@
           </div>
         </div>
 
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label for="latitude" class="form-label">Широта (опционально)</label>
+            <input
+              type="number"
+              class="form-control"
+              id="latitude"
+              step="any"
+              min="-90"
+              max="90"
+              placeholder="Например: 55.7558"
+            >
+          </div>
+
+          <div class="col-md-6 mb-3">
+            <label for="longitude" class="form-label">Долгота (опционально)</label>
+            <input
+              type="number"
+              class="form-control"
+              id="longitude"
+              step="any"
+              min="-180"
+              max="180"
+              placeholder="Например: 37.6176"
+            >
+          </div>
+        </div>
+
         <div class="mb-3">
           <label for="category" class="form-label">Категория *</label>
           <select class="form-select" id="category" required>
@@ -83,6 +104,6 @@
 
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/create-event.js"></script>
+  <script type="module" src="js/pages/create-event.js"></script>
 </body>
 </html>

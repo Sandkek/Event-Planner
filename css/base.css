@@ -80,3 +80,32 @@ body {
   background-color: #fff5f5;
   color: #dc3545 !important;
 }
+
+#appToastContainer .toast {
+  min-width: 320px;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.14);
+}
+
+#appToastContainer .toast-body {
+  font-size: 0.95rem;
+}
+
+.reminder-card {
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.reminders-section .list-group-item {
+  border: none;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.reminders-section .list-group-item:last-child {
+  border-bottom: none;
+}
+
+.reminders-section .list-group-item:hover {
+  background-color: #f8f9fa;
+}
