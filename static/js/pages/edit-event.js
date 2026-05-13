@@ -11,8 +11,8 @@ import {
   notifySuccess
 } from '../services/notifications.service.js';
 import { canDeleteEvent, canEditEvent } from '../services/event-permissions.js';
-import { getUrlParamNumber } from '../core/utils.js';
-import { requireEntity, requireUser } from '../core/guards.js';
+import { requireAuth } from '../core/auth.js';
+import { requireEntity } from '../core/guards.js';
 import { loadNavbar } from '../ui/navbar.js';
 import {
   fillEventForm,
@@ -26,7 +26,7 @@ import {
 document.addEventListener('DOMContentLoaded', async () => {
   await loadNavbar();
 
-  const user = requireUser();
+  const user = await requireAuth();
   if (!user) return;
 
   const pathParts = window.location.pathname.split('/');
@@ -113,9 +113,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (!confirmed) return;
 
-    deleteEvent(eventId);
-    deleteEventAttendees(eventId);
-    deleteEventChat(eventId);
+    await deleteEvent(eventId);
+    await deleteEventAttendees(eventId);
+    await deleteEventChat(eventId);
 
     notifySuccess('Мероприятие удалено.');
     window.location.href = '/profile';

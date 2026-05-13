@@ -1,0 +1,5436 @@
+// __init__.py
+
+# routes package
+
+// attendees.py
+
+from flask import Blueprint, request, session, jsonify
+from models import db, EventAttendee
+
+attendees_bp = Blueprint('attendees', __name__)
+
+
+def serialize_event(event):
+    return {
+        'id': event.id,
+        'title': event.title,
+        'description': event.description,
+        'date': event.date.strftime('%Y-%m-%dT%H:%M'),
+        'location': event.location,
+        'category': event.category,
+        'image': event.image,
+        'latitude': event.latitude,
+        'longitude': event.longitude,
+        'organizer': event.organizer.full_name,
+        'organizerEmail': event.organizer.email
+    }
+
+
+@attendees_bp.route('/api/events/<int:event_id>/status', methods=['GET'])
+def api_get_event_status(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'status': None})
+
+    attendee = EventAttendee.query.filter_by(
+        event_id=event_id,
+        user_id=user_id
+    ).first()
+
+    return jsonify({'status': attendee.status if attendee else None})
+
+
+@attendees_bp.route('/api/events/<int:event_id>/status', methods=['POST'])
+def api_set_event_status(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    data = request.get_json()
+    status = data.get('status')
+
+    if status not in ['going', 'interested', 'not-going']:
+        return jsonify({'success': False, 'message': 'Некорректный статус'}), 400
+
+    attendee = EventAttendee.query.filter_by(
+        event_id=event_id,
+        user_id=user_id
+    ).first()
+
+    if attendee:
+        attendee.status = status
+    else:
+        attendee = EventAttendee(
+            event_id=event_id,
+            user_id=user_id,
+            status=status
+        )
+        db.session.add(attendee)
+
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@attendees_bp.route('/api/events/<int:event_id>/status', methods=['DELETE'])
+def api_delete_event_status(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    attendee = EventAttendee.query.filter_by(
+        event_id=event_id,
+        user_id=user_id
+    ).first()
+
+    if attendee:
+        db.session.delete(attendee)
+        db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@attendees_bp.route('/api/my/joined-events')
+def api_my_joined_events():
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify([])
+
+    attendees = EventAttendee.query.filter_by(
+        user_id=user_id,
+        status='going'
+    ).all()
+
+    events = [item.event for item in attendees]
+
+    return jsonify([serialize_event(event) for event in events])
+
+
+@attendees_bp.route('/api/events/<int:event_id>/going-count')
+def api_get_going_count(event_id):
+    count = EventAttendee.query.filter_by(
+        event_id=event_id,
+        status='going'
+    ).count()
+
+    return jsonify({'count': count})
+
+// auth.py
+
+from flask import Blueprint, request, session, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+from models import db, User
+
+auth_bp = Blueprint('auth', __name__)
+
+
+@auth_bp.route('/api/register', methods=['POST'])
+def api_register():
+    data = request.get_json()
+
+    full_name = data.get('fullName', '').strip()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    if not full_name or not email or not password:
+        return jsonify({'success': False, 'message': 'Заполните все поля.'}), 400
+
+    existing_user = User.query.filter_by(email=email).first()
+
+    if existing_user:
+        return jsonify({
+            'success': False,
+            'message': 'Пользователь с таким email уже существует.'
+        }), 409
+
+    user = User(
+        full_name=full_name,
+        email=email,
+        password_hash=generate_password_hash(password)
+    )
+
+    db.session.add(user)
+    db.session.commit()
+
+    session['user_id'] = user.id
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'id': user.id,
+            'fullName': user.full_name,
+            'email': user.email
+        }
+    })
+
+
+@auth_bp.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json()
+
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    user = User.query.filter_by(email=email).first()
+
+    if not user or not check_password_hash(user.password_hash, password):
+        return jsonify({
+            'success': False,
+            'message': 'Неверный email или пароль.'
+        }), 401
+
+    session['user_id'] = user.id
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'id': user.id,
+            'fullName': user.full_name,
+            'email': user.email
+        }
+    })
+
+
+@auth_bp.route('/api/logout', methods=['POST'])
+def api_logout():
+    session.clear()
+    return jsonify({'success': True})
+
+
+@auth_bp.route('/api/current-user')
+def api_current_user():
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'user': None})
+
+    user = User.query.get(user_id)
+
+    if not user:
+        session.clear()
+        return jsonify({'user': None})
+
+    return jsonify({
+        'user': {
+            'id': user.id,
+            'fullName': user.full_name,
+            'email': user.email
+        }
+    })
+
+// chat.py
+
+from flask import Blueprint, request, session, jsonify
+from models import db, Event, EventAttendee, ChatMessage
+
+chat_bp = Blueprint('chat', __name__)
+
+
+@chat_bp.route('/api/events/<int:event_id>/chat')
+def api_get_chat_messages(event_id):
+    messages = ChatMessage.query.filter_by(event_id=event_id) \
+        .order_by(ChatMessage.created_at.asc()) \
+        .all()
+
+    return jsonify([
+        {
+            'id': message.id,
+            'text': message.text,
+            'userName': message.user.full_name,
+            'userEmail': message.user.email,
+            'timestamp': message.created_at.isoformat()
+        }
+        for message in messages
+    ])
+
+
+@chat_bp.route('/api/events/<int:event_id>/chat', methods=['POST'])
+def api_send_chat_message(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    attendee = EventAttendee.query.filter_by(
+        event_id=event_id,
+        user_id=user_id,
+        status='going'
+    ).first()
+
+    if not attendee:
+        return jsonify({
+            'success': False,
+            'message': 'Чат доступен только участникам мероприятия.'
+        }), 403
+
+    data = request.get_json()
+    text = data.get('text', '').strip()
+
+    if not text:
+        return jsonify({'success': False, 'message': 'Сообщение пустое.'}), 400
+
+    message = ChatMessage(
+        event_id=event_id,
+        user_id=user_id,
+        text=text
+    )
+
+    db.session.add(message)
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@chat_bp.route('/api/events/<int:event_id>/chat', methods=['DELETE'])
+def api_delete_event_chat(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False}), 401
+
+    event = Event.query.get_or_404(event_id)
+
+    if event.organizer_id != user_id:
+        return jsonify({'success': False, 'message': 'Нет прав'}), 403
+
+    ChatMessage.query.filter_by(event_id=event_id).delete()
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+// events.py
+
+from flask import Blueprint, request, session, jsonify
+from datetime import datetime
+from models import db, Event
+
+events_bp = Blueprint('events', __name__)
+
+
+def serialize_event(event):
+    return {
+        'id': event.id,
+        'title': event.title,
+        'description': event.description,
+        'date': event.date.strftime('%Y-%m-%dT%H:%M'),
+        'location': event.location,
+        'category': event.category,
+        'image': event.image,
+        'latitude': event.latitude,
+        'longitude': event.longitude,
+        'inviteCode': event.invite_code,
+        'organizer': event.organizer.full_name,
+        'organizerEmail': event.organizer.email
+    }
+
+
+@events_bp.route('/api/events')
+def api_get_events():
+    events = Event.query.order_by(Event.date).all()
+    return jsonify([serialize_event(event) for event in events])
+
+
+@events_bp.route('/api/events/<int:event_id>')
+def api_get_event(event_id):
+    event = Event.query.get_or_404(event_id)
+    return jsonify(serialize_event(event))
+
+
+@events_bp.route('/api/events', methods=['POST'])
+def api_create_event():
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    data = request.get_json()
+
+    event = Event(
+        title=data.get('title'),
+        description=data.get('description'),
+        date=datetime.fromisoformat(data.get('date')),
+        location=data.get('location'),
+        category=data.get('category'),
+        image=data.get('image', ''),
+        latitude=data.get('latitude'),
+        longitude=data.get('longitude'),
+        invite_code=data.get('inviteCode', ''),
+        organizer_id=user_id
+    )
+
+    db.session.add(event)
+    db.session.commit()
+
+    return jsonify({'success': True, 'id': event.id})
+
+
+@events_bp.route('/api/events/<int:event_id>', methods=['PUT'])
+def api_update_event(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    event = Event.query.get_or_404(event_id)
+
+    if event.organizer_id != user_id:
+        return jsonify({'success': False, 'message': 'Нет прав на редактирование'}), 403
+
+    data = request.get_json()
+
+    event.title = data.get('title')
+    event.description = data.get('description')
+    event.date = datetime.fromisoformat(data.get('date'))
+    event.location = data.get('location')
+    event.category = data.get('category')
+    event.image = data.get('image', '')
+    event.latitude = data.get('latitude')
+    event.longitude = data.get('longitude')
+    event.invite_code = data.get('inviteCode', '')
+
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@events_bp.route('/api/events/<int:event_id>', methods=['DELETE'])
+def delete_event_api(event_id):
+    event = Event.query.get_or_404(event_id)
+
+    db.session.delete(event)
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+// pages.py
+
+from flask import Blueprint, render_template, session, redirect
+
+pages_bp = Blueprint('pages', __name__)
+
+
+@pages_bp.route('/')
+def index():
+    return render_template('index.html')
+
+
+@pages_bp.route('/login')
+def login():
+    return render_template('login.html')
+
+
+@pages_bp.route('/register')
+def register():
+    return render_template('register.html')
+
+
+@pages_bp.route('/profile')
+def profile():
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('profile.html')
+
+
+@pages_bp.route('/create-event')
+def create_event():
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('create-event.html')
+
+
+@pages_bp.route('/event/<int:event_id>')
+def event_detail(event_id):
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('event.html')
+
+
+@pages_bp.route('/edit-event/<int:event_id>')
+def edit_event(event_id):
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('edit-event.html')
+
+
+@pages_bp.route('/settings')
+def settings():
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('settings.html')
+
+
+@pages_bp.route('/calendar')
+def calendar():
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('calendar.html')
+
+// polls.py
+
+from flask import Blueprint, request, session, jsonify
+from models import db, Event, EventAttendee, Poll, PollOption, PollVote
+
+polls_bp = Blueprint('polls', __name__)
+
+
+@polls_bp.route('/api/events/<int:event_id>/polls')
+def api_get_event_polls(event_id):
+    polls = Poll.query.filter_by(event_id=event_id).all()
+    result = []
+
+    for poll in polls:
+        votes_map = {}
+
+        for vote in poll.votes:
+            votes_map[vote.user.email] = vote.option_id
+
+        result.append({
+            'id': poll.id,
+            'title': poll.title,
+            'type': poll.type,
+            'options': [
+                {
+                    'id': option.id,
+                    'text': option.text
+                }
+                for option in poll.options
+            ],
+            'votes': votes_map
+        })
+
+    return jsonify(result)
+
+
+@polls_bp.route('/api/events/<int:event_id>/polls', methods=['POST'])
+def api_create_poll(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    event = Event.query.get_or_404(event_id)
+
+    if event.organizer_id != user_id:
+        return jsonify({
+            'success': False,
+            'message': 'Создавать опрос может только организатор.'
+        }), 403
+
+    data = request.get_json()
+
+    title = data.get('title', '').strip()
+    poll_type = data.get('type', 'custom')
+    options = data.get('options', [])
+
+    if not title:
+        return jsonify({'success': False, 'message': 'Укажите название опроса.'}), 400
+
+    if len(options) < 2:
+        return jsonify({'success': False, 'message': 'Добавьте минимум два варианта ответа.'}), 400
+
+    poll = Poll(
+        event_id=event_id,
+        title=title,
+        type=poll_type
+    )
+
+    db.session.add(poll)
+    db.session.flush()
+
+    for option_text in options:
+        option_text = str(option_text).strip()
+
+        if option_text:
+            db.session.add(PollOption(
+                poll_id=poll.id,
+                text=option_text
+            ))
+
+    db.session.commit()
+
+    return jsonify({'success': True, 'id': poll.id})
+
+
+@polls_bp.route('/api/events/<int:event_id>/polls/<int:poll_id>', methods=['DELETE'])
+def api_delete_poll(event_id, poll_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False}), 401
+
+    event = Event.query.get_or_404(event_id)
+
+    if event.organizer_id != user_id:
+        return jsonify({'success': False, 'message': 'Нет прав.'}), 403
+
+    poll = Poll.query.filter_by(id=poll_id, event_id=event_id).first_or_404()
+
+    PollVote.query.filter_by(poll_id=poll.id).delete()
+    PollOption.query.filter_by(poll_id=poll.id).delete()
+    db.session.delete(poll)
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@polls_bp.route('/api/events/<int:event_id>/polls/<int:poll_id>/vote', methods=['POST'])
+def api_vote_poll(event_id, poll_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    attendee = EventAttendee.query.filter_by(
+        event_id=event_id,
+        user_id=user_id,
+        status='going'
+    ).first()
+
+    if not attendee:
+        return jsonify({
+            'success': False,
+            'message': 'Голосовать могут только участники мероприятия.'
+        }), 403
+
+    data = request.get_json()
+    option_id = data.get('optionId')
+
+    option = PollOption.query.filter_by(
+        id=option_id,
+        poll_id=poll_id
+    ).first()
+
+    if not option:
+        return jsonify({'success': False, 'message': 'Вариант ответа не найден.'}), 404
+
+    vote = PollVote.query.filter_by(
+        poll_id=poll_id,
+        user_id=user_id
+    ).first()
+
+    if vote:
+        vote.option_id = option.id
+    else:
+        vote = PollVote(
+            poll_id=poll_id,
+            option_id=option.id,
+            user_id=user_id
+        )
+        db.session.add(vote)
+
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@polls_bp.route('/api/events/<int:event_id>/polls', methods=['DELETE'])
+def api_delete_event_polls(event_id):
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False}), 401
+
+    event = Event.query.get_or_404(event_id)
+
+    if event.organizer_id != user_id:
+        return jsonify({'success': False}), 403
+
+    polls = Poll.query.filter_by(event_id=event_id).all()
+
+    for poll in polls:
+        PollVote.query.filter_by(poll_id=poll.id).delete()
+        PollOption.query.filter_by(poll_id=poll.id).delete()
+        db.session.delete(poll)
+
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+// profile.py
+
+from flask import Blueprint, request, session, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+from models import db, User
+
+profile_bp = Blueprint('profile', __name__)
+
+
+@profile_bp.route('/api/profile', methods=['PUT'])
+def api_update_profile():
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    user = User.query.get_or_404(user_id)
+    data = request.get_json()
+
+    full_name = data.get('fullName', '').strip()
+    email = data.get('email', '').strip().lower()
+
+    if not full_name or not email:
+        return jsonify({'success': False, 'message': 'Заполните все поля.'}), 400
+
+    existing_user = User.query.filter(
+        User.email == email,
+        User.id != user.id
+    ).first()
+
+    if existing_user:
+        return jsonify({
+            'success': False,
+            'message': 'Пользователь с таким email уже существует.'
+        }), 409
+
+    user.full_name = full_name
+    user.email = email
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'id': user.id,
+            'fullName': user.full_name,
+            'email': user.email
+        }
+    })
+
+
+@profile_bp.route('/api/profile/password', methods=['PUT'])
+def api_update_password():
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Необходима авторизация'}), 401
+
+    user = User.query.get_or_404(user_id)
+    data = request.get_json()
+
+    current_password = data.get('currentPassword', '')
+    new_password = data.get('newPassword', '')
+
+    if not check_password_hash(user.password_hash, current_password):
+        return jsonify({
+            'success': False,
+            'message': 'Текущий пароль введён неверно.'
+        }), 400
+
+    if len(new_password) < 6:
+        return jsonify({
+            'success': False,
+            'message': 'Новый пароль должен содержать минимум 6 символов.'
+        }), 400
+
+    user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+// navbar.html
+
+<!-- navbar.html -->
+<nav class="navbar navbar-expand-lg app-navbar">
+  <div class="container">
+    <a class="navbar-brand" href="/">EventPlanner</a>
+    <div class="d-flex align-items-center" id="authNav">
+      <!-- Содержимое будет вставлено через JS -->
+    </div>
+  </div>
+</nav>
+
+// auth.css
+
+/* auth.css */
+body {
+  background-color: #f8f9fa;
+}
+
+.form-container {
+  max-width: 500px;
+  margin: 4rem auto;
+  padding: 2rem;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+}
+
+.logo {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.logo h1 {
+  font-weight: 600;
+  color: #4361ee;
+  margin-bottom: 0.25rem;
+}
+
+.logo p.text-muted {
+  font-size: 1rem;
+}
+
+#authError {
+  display: none;
+}
+
+@media (max-width: 576px) {
+  .form-container {
+    margin: 2rem 1rem;
+    padding: 1.5rem;
+  }
+}
+
+// base.css
+
+/* base.css */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: #f9fafb;
+  margin: 0;
+}
+
+.app-navbar {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  background-color: #ffffff !important;
+  padding: 0.75rem 0 !important;
+}
+
+.navbar-brand {
+  font-weight: 700;
+  color: #4361ee !important;
+  font-size: 1.4rem;
+  text-decoration: none !important;
+}
+
+.user-info {
+  font-size: 0.95rem;
+  color: #495057;
+}
+
+.btn-logout {
+  font-size: 0.875rem;
+  padding: 0.25rem 0.75rem;
+}
+
+/* Выпадающее меню */
+/* Аватар пользователя */
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: #4361ee;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+/* Имя пользователя */
+.user-info {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #212529;
+  transition: color 0.2s;
+}
+
+.user-info:hover {
+  color: #4361ee !important;
+}
+
+/* Выпадающее меню — без изменений */
+.dropdown-toggle::after {
+  display: none;
+}
+
+.dropdown-menu {
+  min-width: 180px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+
+.dropdown-item {
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+}
+
+.dropdown-item:hover {
+  background-color: #f8f9fa;
+}
+
+.dropdown-item.text-danger:hover {
+  background-color: #fff5f5;
+  color: #dc3545 !important;
+}
+
+#appToastContainer .toast {
+  min-width: 320px;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.14);
+}
+
+#appToastContainer .toast-body {
+  font-size: 0.95rem;
+}
+
+.reminder-card {
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.reminders-section .list-group-item {
+  border: none;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.reminders-section .list-group-item:last-child {
+  border-bottom: none;
+}
+
+.reminders-section .list-group-item:hover {
+  background-color: #f8f9fa;
+}
+
+// calendar.css
+
+body {
+  background-color: #f9fafb;
+}
+
+.calendar-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.calendar-page-header h1 {
+  font-weight: 700;
+  color: #4361ee;
+}
+
+.calendar-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  padding: 1rem;
+}
+
+.calendar-filters {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr auto;
+  gap: 1rem;
+  align-items: end;
+}
+
+.calendar-filter-actions {
+  display: flex;
+  align-items: end;
+}
+
+#calendar {
+  min-height: 700px;
+}
+
+.fc .fc-toolbar-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.fc .fc-button {
+  border-radius: 8px;
+}
+
+.fc .fc-daygrid-event,
+.fc .fc-timegrid-event {
+  border-radius: 8px;
+  padding: 2px 4px;
+}
+
+.fc .fc-list-event:hover td,
+.fc .fc-daygrid-day:hover {
+  background-color: #f8f9fa;
+}
+
+@media (max-width: 768px) {
+  .calendar-card {
+    padding: 0.5rem;
+  }
+
+  .calendar-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-filter-actions {
+    display: block;
+  }
+
+  .calendar-filter-actions .btn {
+    width: 100%;
+  }
+
+  #calendar {
+    min-height: 600px;
+  }
+
+  .fc .fc-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .fc .fc-toolbar-title {
+    font-size: 1.15rem;
+    text-align: center;
+  }
+}
+
+// create-event.css
+
+/* create-event.css */
+body {
+  background-color: #f9fafb;
+}
+
+.form-container {
+  max-width: 700px;
+  margin: 2rem auto;
+  padding: 2rem;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.page-title {
+  font-weight: 700;
+  color: #4361ee;
+  margin-bottom: 1.5rem;
+}
+
+.form-label {
+  font-weight: 600;
+  margin-top: 1rem;
+}
+
+.btn-create {
+  background-color: #4361ee;
+  border: none;
+  padding: 0.75rem 2rem;
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.btn-create:hover {
+  background-color: #3a56d4;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 1.5rem;
+  color: #4361ee;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+// event.css
+
+/* event.css */
+.event-header {
+  background: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  padding: 1.5rem 0;
+}
+
+.event-title {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: #111;
+}
+
+.event-meta {
+  color: #6c757d;
+  font-size: 1.1rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.event-image {
+  width: 100%;
+  height: 300px;
+  object-fit: cover;
+  background-color: #e9ecef;
+  margin-bottom: 2rem;
+}
+
+.event-content {
+  max-width: 900px;
+  margin: 0 auto 2rem;
+  padding: 0 1rem;
+}
+
+.event-description h2 {
+  font-size: 1.5rem;
+  margin: 1.5rem 0 1rem;
+  color: #333;
+}
+
+.rsvp-buttons {
+  display: flex;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+  flex-wrap: wrap;
+}
+
+.rsvp-btn {
+  padding: 0.6rem 1.25rem;
+  border-radius: 50px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 2px solid transparent;
+}
+
+.rsvp-btn.going { background-color: #4361ee; color: white; }
+.rsvp-btn.going.active { background-color: white; color: #4361ee; border-color: #4361ee; }
+
+.rsvp-btn.interested { background-color: #f1c40f; color: white; }
+.rsvp-btn.interested.active { background-color: white; color: #f1c40f; border-color: #f1c40f; }
+
+.rsvp-btn.not-going { background-color: #e0e0e0; color: #555; }
+.rsvp-btn.not-going.active { background-color: white; color: #999; border-color: #ccc; }
+
+.attendees-section h3 {
+  margin: 2rem 0 1rem;
+  color: #333;
+}
+
+.attendees-list {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+}
+
+.attendee-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background-color: #4361ee;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.nav-tabs {
+  border-bottom: 1px solid #dee2e6;
+  margin: 2rem 0 1.5rem;
+}
+
+.tab-content {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+/* Чат */
+.chat-messages {
+  height: 300px;
+  overflow-y: auto;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 1rem;
+  background-color: #fff;
+  margin-bottom: 1rem;
+}
+
+.chat-message {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.chat-message:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.chat-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: #4361ee;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.chat-user-name {
+  font-weight: 600;
+  color: #4361ee;
+  font-size: 0.95rem;
+}
+
+.chat-text {
+  color: #212529;
+  line-height: 1.5;
+}
+
+.chat-input input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chat-input .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.polls-section {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+#pollsContainer .card {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+#pollsContainer .progress {
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+#pollsContainer .progress-bar {
+  background-color: #4361ee;
+}
+
+#eventMap {
+  width: 100%;
+  height: 360px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  margin-bottom: 2rem;
+}
+
+.maplibregl-map {
+  font-family: inherit;
+}
+
+.maplibregl-popup-content {
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+@media (max-width: 768px) {
+  .event-title { font-size: 1.5rem; }
+  .event-meta { flex-direction: column; gap: 0.5rem; }
+  .rsvp-buttons { flex-direction: column; }
+  .rsvp-btn { width: 100%; text-align: center; }
+  .chat-messages {
+    height: 250px;
+  }
+}
+
+// main.css
+
+/* main.css */
+.hero {
+  background: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%);
+  color: white;
+  padding: 4rem 1rem;
+  text-align: center;
+}
+
+.hero h1 {
+  font-weight: 800;
+  font-size: 2.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.search-container {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.search-container .form-control {
+  height: 56px;
+  font-size: 1.1rem;
+  border-radius: 30px;
+  padding-left: 24px;
+}
+
+.container .form-select {
+  height: 48px;
+  padding: 0 1rem;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  font-size: 0.95rem;
+}
+
+.filters select, .filters input {
+  height: 48px;
+  padding: 0 1rem;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+}
+
+.events-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+  padding: 0 1rem 2rem;
+}
+
+.event-card {
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transition: transform 0.2s;
+}
+
+.event-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+}
+
+.event-image {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  background-color: #e9ecef;
+}
+
+.event-content {
+  padding: 1.25rem;
+}
+
+.event-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: #111;
+}
+
+.event-meta {
+  color: #6c757d;
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+.event-description {
+  color: #495057;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.btn-rsvp {
+  width: 100%;
+  background-color: #4361ee;
+  border: none;
+  color: white;
+  padding: 0.6rem;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: background-color 0.2s;
+}
+
+.btn-rsvp:hover {
+  background-color: #3a56d4;
+}
+
+#createEventBtn {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  font-weight: 600;
+  padding: 0.5rem 1.25rem;
+  border-radius: 30px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+#createEventBtn:hover {
+  background-color: white;
+  color: #4361ee;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+@media (max-width: 576px) {
+  .hero h1 { font-size: 1.75rem; }
+  .container .form-select {
+    min-width: 140px !important;
+    height: 44px;
+    font-size: 0.9rem;
+  }
+  .filters select, .filters input { height: 44px; font-size: 0.95rem; }
+}
+
+// profile.css
+
+/* profile.css */
+.profile-header h1 {
+  font-weight: 700;
+  color: #4361ee;
+  margin-bottom: 0.5rem;
+}
+
+/* Используем ту же сетку, что и на главной */
+.events-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+  padding: 1rem 0;
+}
+
+.event-card {
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transition: transform 0.2s;
+}
+
+.event-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+}
+
+.event-image {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  background-color: #e9ecef;
+}
+
+.event-content {
+  padding: 1.25rem;
+}
+
+.event-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: #111;
+}
+
+.event-meta {
+  color: #6c757d;
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+.event-description {
+  color: #495057;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.no-events {
+  text-align: center;
+  padding: 2rem;
+  color: #6c757d;
+}
+
+/* Адаптивность */
+@media (max-width: 576px) {
+  .events-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+// settings.css
+
+body {
+  background-color: #f9fafb;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.settings-header h1 {
+  font-weight: 700;
+  color: #4361ee;
+}
+
+.settings-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  padding: 1.5rem;
+  height: 100%;
+}
+
+.settings-card-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 1.25rem;
+  color: #212529;
+}
+
+.form-check-input:checked {
+  background-color: #4361ee;
+  border-color: #4361ee;
+}
+
+// auth.js
+
+export async function getCurrentUser() {
+  const response = await fetch('/api/current-user');
+  const data = await response.json();
+
+  return data.user;
+}
+
+export async function logout() {
+  await fetch('/api/logout', {
+    method: 'POST'
+  });
+}
+
+export async function requireAuth(redirectTo = '/login') {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    window.location.href = redirectTo;
+    return null;
+  }
+
+  return user;
+}
+
+// constants.js
+
+export const STORAGE_KEYS = {
+  USERS: 'users',
+  CURRENT_USER: 'currentUser',
+  USER_EVENTS: 'userEvents',
+  EVENT_ATTENDEES: 'eventAttendees',
+  EVENT_CHATS: 'eventChats'
+};
+
+export const EVENT_CATEGORIES = {
+  tech: 'Технологии',
+  health: 'Здоровье и спорт',
+  culture: 'Культура и искусство',
+  business: 'Бизнес и карьера',
+  hobby: 'Хобби и творчество'
+};
+
+// guards.js
+
+import { getCurrentUser } from './auth.js';
+import { notifyError } from '../services/notifications.service.js';
+
+export function requireUser(redirectTo = '/login') {
+  const user = getCurrentUser();
+
+  if (!user) {
+    window.location.href = redirectTo;
+    return null;
+  }
+
+  return user;
+}
+
+export function requireEntity(
+  entity,
+  notFoundMessage = 'Объект не найден.',
+  redirectTo = '/'
+) {
+  if (!entity) {
+    notifyError(notFoundMessage);
+    window.location.href = redirectTo;
+    return false;
+  }
+
+  return true;
+}
+
+export function requireOwnership(
+  entity,
+  user,
+  options = {}
+) {
+  const {
+    ownerField = 'organizerEmail',
+    message = 'У вас нет доступа к этому объекту.',
+    redirectTo = '/'
+  } = options;
+
+  if (!entity || !user || entity[ownerField] !== user.email) {
+    notifyError(message);
+    window.location.href = redirectTo;
+    return false;
+  }
+
+  return true;
+}
+
+// storage.js
+
+export function getItem(key, defaultValue) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : defaultValue;
+  } catch (error) {
+    console.error(`Ошибка чтения localStorage по ключу "${key}"`, error);
+    return defaultValue;
+  }
+}
+
+export function setItem(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.error(`Ошибка записи localStorage по ключу "${key}"`, error);
+  }
+}
+
+export function removeItem(key) {
+  localStorage.removeItem(key);
+}
+
+// utils.js
+
+export function getUserInitials(fullName) {
+  if (!fullName) return '?';
+
+  return fullName
+    .trim()
+    .split(/\s+/)
+    .map(part => part[0]?.toUpperCase())
+    .join('')
+    .slice(0, 2);
+}
+
+export function formatShortDate(isoString) {
+  const date = new Date(isoString);
+
+  const day = date.getDate();
+  const month = date.toLocaleString('ru-RU', { month: 'short' });
+  const time = date.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  return `${day} ${month} · ${time}`;
+}
+
+export function formatFullDate(isoString) {
+  const date = new Date(isoString);
+
+  return date.toLocaleDateString('ru-RU', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+export function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+export function imageToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+  });
+}
+
+export function getEventPlaceholderSvg(
+  width = 320,
+  height = 180,
+  text = '🖼️'
+) {
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <rect width="100%" height="100%" fill="#e9ecef"/>
+      <text x="50%" y="50%" fill="#aaa" font-size="18" text-anchor="middle" dy=".3em">${text}</text>
+    </svg>
+  `)}`;
+}
+
+export function getUrlParamNumber(name) {
+  const value = new URLSearchParams(window.location.search).get(name);
+  const parsed = Number(value);
+
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+// calendar.js
+
+// js/pages/calendar.js
+
+import { loadNavbar } from '../ui/navbar.js';
+import { getAllEvents } from '../services/events.service.js';
+import { requireUser } from '../core/guards.js';
+import { getUserEventStatus } from '../services/attendees.service.js';
+
+function filterEvents(events, user, filters) {
+  return events.filter(event => {
+    const matchesOwnership =
+      filters.ownership === 'all' ||
+      (filters.ownership === 'my' && event.organizerEmail === user.email) ||
+      (filters.ownership === 'joined' && getUserEventStatus(event.id, user.email) === 'going');
+
+    const matchesCategory =
+      !filters.category || event.category === filters.category;
+
+    return matchesOwnership && matchesCategory;
+  });
+}
+
+function getCategoryColor(category) {
+  const categoryColors = {
+    tech: '#4361ee',
+    health: '#2a9d8f',
+    culture: '#9b5de5',
+    business: '#f4a261',
+    hobby: '#e76f51'
+  };
+
+  return categoryColors[category] || '#6c757d';
+}
+
+function mapEventsToCalendar(events) {
+  return events.map(event => ({
+    id: String(event.id),
+    title: event.title,
+    start: event.date,
+    url: `/event?id=${event.id}`,
+    backgroundColor: getCategoryColor(event.category),
+    borderColor: getCategoryColor(event.category),
+    extendedProps: {
+      location: event.location,
+      organizer: event.organizer,
+      category: event.category
+    }
+  }));
+}
+
+function createCalendar(calendarEl) {
+  return new FullCalendar.Calendar(calendarEl, {
+    locale: 'ru',
+    initialView: 'dayGridMonth',
+    height: 'auto',
+    firstDay: 1,
+    navLinks: true,
+    nowIndicator: true,
+
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,listMonth'
+    },
+
+    buttonText: {
+      today: 'Сегодня',
+      month: 'Месяц',
+      week: 'Неделя',
+      list: 'Список'
+    },
+
+    noEventsContent: 'Нет мероприятий',
+
+    events: [],
+
+    eventTimeFormat: {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    },
+
+    eventClick(info) {
+      info.jsEvent.preventDefault();
+      window.location.href = info.event.url;
+    },
+
+    eventDidMount(info) {
+      const { location, organizer } = info.event.extendedProps;
+
+      const tooltipParts = [
+        info.event.title,
+        location ? `Место: ${location}` : '',
+        organizer ? `Организатор: ${organizer}` : ''
+      ].filter(Boolean);
+
+      info.el.title = tooltipParts.join('\n');
+    }
+  });
+}
+
+function getFiltersFromDom() {
+  return {
+    ownership: document.getElementById('ownershipFilter')?.value || 'all',
+    category: document.getElementById('categoryFilter')?.value || ''
+  };
+}
+
+function renderCalendarEvents(calendar, allEvents, user) {
+  const filters = getFiltersFromDom();
+  const filteredEvents = filterEvents(allEvents, user, filters);
+  const calendarEvents = mapEventsToCalendar(filteredEvents);
+
+  calendar.removeAllEvents();
+  calendar.addEventSource(calendarEvents);
+}
+
+function setupFilters(calendar, allEvents, user) {
+  const ownershipFilter = document.getElementById('ownershipFilter');
+  const categoryFilter = document.getElementById('categoryFilter');
+  const resetBtn = document.getElementById('resetCalendarFiltersBtn');
+
+  ownershipFilter?.addEventListener('change', () => {
+    renderCalendarEvents(calendar, allEvents, user);
+  });
+
+  categoryFilter?.addEventListener('change', () => {
+    renderCalendarEvents(calendar, allEvents, user);
+  });
+
+  resetBtn?.addEventListener('click', () => {
+    if (ownershipFilter) ownershipFilter.value = 'all';
+    if (categoryFilter) categoryFilter.value = '';
+
+    renderCalendarEvents(calendar, allEvents, user);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+
+  const user = requireUser();
+  if (!user) return;
+
+  const calendarEl = document.getElementById('calendar');
+  const allEvents = await getAllEvents();
+
+  const calendar = createCalendar(calendarEl);
+  calendar.render();
+
+  renderCalendarEvents(calendar, allEvents, user);
+  setupFilters(calendar, allEvents, user);
+});
+
+// create-event.js
+
+import { createEvent } from '../services/events.service.js';
+import { notifyError, notifySuccess } from '../services/notifications.service.js';
+import { requireUser } from '../core/guards.js';
+import {
+  getEventFormData,
+  resolveEventImage,
+  setMinDateTime,
+  setupImagePreview,
+  validateImageFile
+} from '../ui/event-form.js';
+import { generateInviteCode } from '../services/invite.service.js';
+import { loadNavbar } from '../ui/navbar.js';
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+
+  const user = await requireUser();
+  if (!user) return;
+
+  setMinDateTime();
+  setupImagePreview({ alt: 'Предпросмотр изображения' });
+
+  const form = document.getElementById('createEventForm');
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    const file = document.getElementById('imageUpload')?.files?.[0];
+    const imageValidation = validateImageFile(file);
+
+    if (!imageValidation.valid) {
+      notifyError(imageValidation.message);
+      return;
+    }
+
+    let image = '';
+
+    try {
+      image = await resolveEventImage({ fallbackImage: '' });
+    } catch {
+      notifyError('Ошибка при загрузке изображения');
+      return;
+    }
+
+    const eventData = getEventFormData({
+      formId: 'createEventForm',
+      currentUser: user,
+      eventId: null,
+      image
+    });
+
+    eventData.inviteCode = generateInviteCode();
+
+    const result = await createEvent(eventData);
+
+    if (!result.success) {
+      notifyError(result.message || 'Не удалось создать мероприятие.');
+      return;
+    }
+
+    notifySuccess('Мероприятие успешно создано!');
+    window.location.href = `/event/${result.id}`;
+  });
+});
+
+// edit-event.js
+
+import {
+  deleteEvent,
+  getEventById,
+  updateEvent
+} from '../services/events.service.js';
+import { deleteEventAttendees } from '../services/attendees.service.js';
+import { deleteEventChat } from '../services/chat.service.js';
+import {
+  confirmAction,
+  notifyError,
+  notifySuccess
+} from '../services/notifications.service.js';
+import { canDeleteEvent, canEditEvent } from '../services/event-permissions.js';
+import { requireAuth } from '../core/auth.js';
+import { requireEntity } from '../core/guards.js';
+import { loadNavbar } from '../ui/navbar.js';
+import {
+  fillEventForm,
+  getEventFormData,
+  resolveEventImage,
+  setMinDateTime,
+  setupImagePreview,
+  validateImageFile
+} from '../ui/event-form.js';
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+
+  const user = await requireAuth();
+  if (!user) return;
+
+  const pathParts = window.location.pathname.split('/');
+  const eventId = Number(pathParts[pathParts.length - 1]);
+
+  if (!eventId || Number.isNaN(eventId)) {
+    notifyError('Не указан ID мероприятия');
+    window.history.back();
+    return;
+  }
+
+  const event = await getEventById(eventId);
+
+  if (!requireEntity(event, 'Мероприятие не найдено.')) return;
+
+  if (!canEditEvent(event, user)) {
+    notifyError('Вы не можете редактировать это мероприятие.');
+    window.location.href = '/';
+    return;
+  }
+
+  setMinDateTime();
+  fillEventForm(event);
+  setupImagePreview({ alt: 'Новое изображение' });
+
+  const form = document.getElementById('editEventForm');
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    const file = document.getElementById('imageUpload')?.files?.[0];
+    const imageValidation = validateImageFile(file);
+
+    if (!imageValidation.valid) {
+      notifyError(imageValidation.message);
+      return;
+    }
+
+    let image = event.image || '';
+
+    try {
+      image = await resolveEventImage({
+        fallbackImage: event.image || ''
+      });
+    } catch {
+      notifyError('Ошибка при загрузке изображения');
+      return;
+    }
+
+    const updatedEvent = getEventFormData({
+      formId: 'editEventForm',
+      currentUser: user,
+      eventId,
+      image
+    });
+
+    updatedEvent.inviteCode = event.inviteCode || '';
+
+    await updateEvent(updatedEvent);
+    notifySuccess('Мероприятие успешно обновлено!');
+    window.location.href = `/event/${eventId}`;
+  });
+
+  document.getElementById('deleteEventBtn').addEventListener('click', async () => {
+    if (!canDeleteEvent(event, user)) {
+      notifyError('Вы не можете удалить это мероприятие.');
+      return;
+    }
+
+    const confirmed = await confirmAction(
+      'Вы уверены, что хотите удалить это мероприятие? Все записи участников и сообщения чата будут удалены.',
+      {
+        title: 'Удаление мероприятия',
+        confirmText: 'Удалить',
+        cancelText: 'Отмена',
+        confirmButtonClass: 'btn-danger'
+      }
+    );
+
+    if (!confirmed) return;
+
+    await deleteEvent(eventId);
+    await deleteEventAttendees(eventId);
+    await deleteEventChat(eventId);
+
+    notifySuccess('Мероприятие удалено.');
+    window.location.href = '/profile';
+  });
+});
+
+// event.js
+
+// static/js/pages/event.js
+
+import { requireAuth } from '../core/auth.js';
+import {
+  escapeHtml,
+  formatFullDate,
+  getEventPlaceholderSvg,
+  getUserInitials
+} from '../core/utils.js';
+import { getEventById, deleteEvent } from '../services/events.service.js';
+import {
+  deleteEventAttendees,
+  getGoingCount,
+  getUserEventStatus,
+  removeAttendeeStatus,
+  setAttendeeStatus
+} from '../services/attendees.service.js';
+import {
+  deleteEventChat,
+  getChatMessages,
+  saveChatMessage
+} from '../services/chat.service.js';
+import {
+  confirmAction,
+  notifyError,
+  notifySuccess,
+  notifyWarning
+} from '../services/notifications.service.js';
+import { getEventPermissions } from '../services/event-permissions.js';
+import {
+  canCreatePoll,
+  canDeletePoll,
+  canVoteInPoll
+} from '../services/poll-permissions.js';
+import {
+  createPoll,
+  createPollFromFormData,
+  deletePoll,
+  deleteEventPolls,
+  getEventPolls,
+  voteInPoll
+} from '../services/polls.service.js';
+import {
+  acceptInvite,
+  buildInviteLink,
+  getInviteCodeFromUrl,
+  validateInvite
+} from '../services/invite.service.js';
+import {
+  addPollOptionField,
+  getPollFormData,
+  renderPollsList,
+  resetPollForm,
+  setupPollOptionsPreview
+} from '../ui/polls.js';
+import { loadNavbar } from '../ui/navbar.js';
+
+async function renderAttendees(eventId, user) {
+  const countEl = document.getElementById('attendeesCount');
+  const container = document.getElementById('attendeesList');
+
+  if (!countEl || !container) return;
+
+  const count = await getGoingCount(eventId);
+  countEl.textContent = count;
+
+  const userStatus = user ? await getUserEventStatus(eventId) : null;
+
+  if (count === 0) {
+    container.innerHTML = '<p>Пока никто не записался.</p>';
+    return;
+  }
+
+  let html = `<p>Всего записано: ${count} человек`;
+  if (userStatus === 'going') {
+    html += ' (включая вас)';
+  }
+  html += '.</p>';
+
+  container.innerHTML = html;
+}
+
+function renderEventMap(event) {
+  const mapPlaceholder = document.getElementById('mapPlaceholder');
+  const mapContainer = document.getElementById('eventMap');
+
+  if (!mapPlaceholder || !mapContainer) return;
+
+  const hasCoordinates =
+    Number.isFinite(event.latitude) &&
+    Number.isFinite(event.longitude);
+
+  if (!hasCoordinates) {
+    mapPlaceholder.innerHTML = `
+      <div class="alert alert-info">
+        📍 <strong>Место проведения:</strong> ${event.location}
+        <br><small>Координаты для отображения карты не указаны.</small>
+      </div>
+    `;
+    mapContainer.style.display = 'none';
+    return;
+  }
+
+  mapPlaceholder.innerHTML = `
+    <div class="alert alert-light border">
+      📍 <strong>Место проведения:</strong> ${event.location}
+    </div>
+  `;
+
+  mapContainer.style.display = '';
+
+  const map = new maplibregl.Map({
+    container: 'eventMap',
+    style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+    center: [event.longitude, event.latitude],
+    zoom: 14
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  const popup = new maplibregl.Popup({ offset: 25 }).setHTML(`
+    <strong>${event.title}</strong><br>
+    ${event.location}
+  `);
+
+  new maplibregl.Marker()
+    .setLngLat([event.longitude, event.latitude])
+    .setPopup(popup)
+    .addTo(map);
+
+  map.on('load', () => {
+    map.resize();
+  });
+}
+
+async function renderChat(event, eventId, user) {
+  const container = document.getElementById('chatMessages');
+  const chatInput = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('sendChatBtn');
+
+  if (!container || !chatInput || !sendBtn) return;
+
+  const userStatus = user ? await getUserEventStatus(eventId) : null;
+  const permissions = getEventPermissions(event, user, userStatus);
+
+  if (!permissions.canViewChat) {
+    container.innerHTML = '<p class="text-center text-muted">Чат доступен только участникам мероприятия.</p>';
+    chatInput.disabled = true;
+    sendBtn.disabled = true;
+    return;
+  }
+
+  const messages = await getChatMessages(eventId);
+
+  if (!messages.length) {
+    container.innerHTML = '<p class="text-center text-muted">Пока нет сообщений. Начните обсуждение!</p>';
+  } else {
+    container.innerHTML = messages.map(msg => {
+      const initials = getUserInitials(msg.userName);
+      const isCurrentUser = msg.userEmail === user.email;
+      const avatarBg = isCurrentUser ? '#3a0ca3' : '#4361ee';
+
+      return `
+        <div class="chat-message">
+          <div class="chat-header">
+            <div class="chat-avatar" style="background-color: ${avatarBg};">${initials}</div>
+            <div>
+              <div class="chat-user-name">${escapeHtml(msg.userName)}</div>
+              <div class="text-muted small">${new Date(msg.timestamp).toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+              })}</div>
+            </div>
+          </div>
+          <div class="chat-text">${escapeHtml(msg.text)}</div>
+        </div>
+      `;
+    }).join('');
+
+    container.scrollTop = container.scrollHeight;
+  }
+
+  chatInput.disabled = !permissions.canSendMessage;
+  sendBtn.disabled = !permissions.canSendMessage;
+}
+
+async function updateRsvpButtons(event, eventId, user) {
+  const userStatus = await getUserEventStatus(eventId);
+  const permissions = getEventPermissions(event, user, userStatus);
+
+  document.querySelectorAll('.rsvp-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.status === userStatus);
+    btn.disabled = !permissions.canRespond;
+  });
+}
+
+async function renderPolls(event, eventId, user) {
+  const pollsContainer = document.getElementById('pollsContainer');
+  if (!pollsContainer) return;
+
+  const polls = await getEventPolls(eventId);
+  const canDelete = canDeletePoll(event, user);
+  const canVote = await canVoteInPoll(event, user, eventId);
+
+  renderPollsList(pollsContainer, polls, user, {
+    canVote,
+    canDelete
+  });
+}
+
+function setupPollControls(event, eventId, user) {
+  const showPollFormBtn = document.getElementById('showPollFormBtn');
+  const pollFormContainer = document.getElementById('pollFormContainer');
+  const addPollOptionBtn = document.getElementById('addPollOptionBtn');
+  const createPollBtn = document.getElementById('createPollBtn');
+  const cancelPollBtn = document.getElementById('cancelPollBtn');
+  const pollsContainer = document.getElementById('pollsContainer');
+
+  if (!showPollFormBtn || !pollFormContainer || !pollsContainer) return;
+
+  setupPollOptionsPreview();
+
+  const canCreate = canCreatePoll(event, user);
+  showPollFormBtn.style.display = canCreate ? '' : 'none';
+
+  showPollFormBtn.addEventListener('click', () => {
+    pollFormContainer.style.display = '';
+  });
+
+  cancelPollBtn?.addEventListener('click', () => {
+    pollFormContainer.style.display = 'none';
+    resetPollForm();
+  });
+
+  addPollOptionBtn?.addEventListener('click', () => {
+    addPollOptionField();
+  });
+
+  createPollBtn?.addEventListener('click', async () => {
+    if (!canCreatePoll(event, user)) return;
+
+    const formData = getPollFormData();
+
+    if (!formData.title) {
+      notifyError('Укажите название опроса.');
+      return;
+    }
+
+    if (formData.options.length < 2) {
+      notifyError('Добавьте минимум два варианта ответа.');
+      return;
+    }
+
+    const poll = createPollFromFormData(eventId, user, formData);
+    const result = await createPoll(eventId, poll);
+
+    if (!result.success) {
+      notifyError(result.message || 'Не удалось создать опрос.');
+      return;
+    }
+
+    notifySuccess('Опрос создан.');
+    pollFormContainer.style.display = 'none';
+    resetPollForm();
+    await renderPolls(event, eventId, user);
+  });
+
+  pollsContainer.addEventListener('change', async e => {
+    const input = e.target.closest('.poll-option-input');
+    if (!input) return;
+
+    const canVote = await canVoteInPoll(event, user, eventId);
+
+    if (!canVote) {
+      notifyWarning('Голосовать могут только участники мероприятия (статус "Пойду").');
+      await renderPolls(event, eventId, user);
+      return;
+    }
+
+    const pollId = Number(input.dataset.pollId);
+    const optionId = Number(input.value);
+
+    const result = await voteInPoll(eventId, pollId, user.email, optionId);
+
+    if (!result.success) {
+      notifyError(result.message || 'Не удалось проголосовать.');
+      await renderPolls(event, eventId, user);
+      return;
+    }
+
+    await renderPolls(event, eventId, user);
+  });
+
+  pollsContainer.addEventListener('click', async e => {
+    const deleteBtn = e.target.closest('.poll-delete-btn');
+    if (!deleteBtn) return;
+
+    if (!canDeletePoll(event, user)) return;
+
+    const pollId = Number(deleteBtn.dataset.pollId);
+    const confirmed = await confirmAction('Удалить этот опрос?', {
+      title: 'Удаление опроса',
+      confirmText: 'Удалить',
+      cancelText: 'Отмена',
+      confirmButtonClass: 'btn-danger'
+    });
+
+    if (!confirmed) return;
+
+    const result = await deletePoll(eventId, pollId);
+
+    if (!result.success) {
+      notifyError(result.message || 'Не удалось удалить опрос.');
+      return;
+    }
+
+    notifySuccess('Опрос удалён.');
+    await renderPolls(event, eventId, user);
+  });
+}
+
+async function renderInviteSection(event, eventId, user) {
+  const inviteSection = document.getElementById('inviteSection');
+  const inviteNotice = document.getElementById('inviteNotice');
+
+  if (!inviteSection || !inviteNotice) return;
+
+  inviteSection.innerHTML = '';
+  inviteNotice.innerHTML = '';
+
+  const inviteCodeFromUrl = getInviteCodeFromUrl();
+  const isInviteValid = validateInvite(event, inviteCodeFromUrl);
+  const isOwner = event.organizerEmail === user.email;
+
+  if (isOwner) {
+    inviteSection.innerHTML = `
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title mb-2">Приглашение участников</h5>
+          <p class="text-muted mb-3">Скопируйте ссылку и отправьте её участникам.</p>
+          <div class="input-group">
+            <input
+              type="text"
+              class="form-control"
+              id="inviteLinkInput"
+              readonly
+              value="${buildInviteLink(event)}"
+            >
+            <button class="btn btn-outline-primary" type="button" id="copyInviteLinkBtn">
+              Копировать
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('copyInviteLinkBtn')?.addEventListener('click', async () => {
+      const input = document.getElementById('inviteLinkInput');
+      const value = input?.value || '';
+
+      try {
+        await navigator.clipboard.writeText(value);
+        notifySuccess('Ссылка приглашения скопирована.');
+      } catch {
+        if (input) {
+          input.select();
+          document.execCommand('copy');
+          notifySuccess('Ссылка приглашения скопирована.');
+        }
+      }
+    });
+  }
+
+  if (!isOwner && inviteCodeFromUrl) {
+    if (isInviteValid) {
+      const currentStatus = await getUserEventStatus(eventId);
+
+      if (currentStatus !== 'going') {
+        inviteNotice.innerHTML = `
+          <div class="alert alert-info d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+              Вы перешли по ссылке-приглашению. Нажмите кнопку, чтобы принять приглашение.
+            </div>
+            <button class="btn btn-primary btn-sm" id="acceptInviteBtn" type="button">
+              Принять приглашение
+            </button>
+          </div>
+        `;
+
+        document.getElementById('acceptInviteBtn')?.addEventListener('click', async () => {
+          await setAttendeeStatus(eventId, null, 'going');
+          notifySuccess('Приглашение принято. Вы записаны на мероприятие.');
+
+          await renderAttendees(eventId, user);
+          await renderChat(event, eventId, user);
+          await updateRsvpButtons(event, eventId, user);
+          await renderPolls(event, eventId, user);
+          await renderInviteSection(event, eventId, user);
+        });
+      } else {
+        inviteNotice.innerHTML = `
+          <div class="alert alert-success">
+            Вы уже приняли приглашение и записаны на мероприятие.
+          </div>
+        `;
+      }
+    } else {
+      inviteNotice.innerHTML = `
+        <div class="alert alert-danger">
+          Ссылка приглашения недействительна.
+        </div>
+      `;
+    }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+
+  const user = await requireAuth();
+  if (!user) return;
+
+  const pathParts = window.location.pathname.split('/');
+  const eventId = Number(pathParts[pathParts.length - 1]);
+
+  if (!eventId || Number.isNaN(eventId)) {
+    document.getElementById('eventContent').innerHTML =
+      '<p class="text-center">Неверный ID мероприятия.</p>';
+    return;
+  }
+
+  const event = await getEventById(eventId);
+
+  if (!event) {
+    document.getElementById('eventContent').innerHTML =
+      '<p class="text-center">Мероприятие не найдено.</p>';
+    return;
+  }
+
+  document.getElementById('pageTitle').textContent = `${event.title} — EventPlanner`;
+  document.getElementById('eventTitle').textContent = event.title;
+  document.getElementById('eventDate').textContent = formatFullDate(event.date);
+  document.getElementById('eventLocation').textContent = event.location;
+  document.getElementById('eventDescription').textContent = event.description;
+  document.getElementById('eventOrganizer').textContent = event.organizer;
+
+  const imageUrl =
+    event.image || getEventPlaceholderSvg(700, 300, '🖼️ Фото мероприятия');
+
+  document.querySelector('.event-image-container').innerHTML = `
+    <img src="${imageUrl}" alt="${event.title}" class="w-100 h-100" style="object-fit: cover;">
+  `;
+
+  renderEventMap(event);
+
+  await renderAttendees(eventId, user);
+  await renderChat(event, eventId, user);
+  await updateRsvpButtons(event, eventId, user);
+  await renderPolls(event, eventId, user);
+  setupPollControls(event, eventId, user);
+  await renderInviteSection(event, eventId, user);
+
+  document.querySelectorAll('.rsvp-btn').forEach(btn => {
+    btn.addEventListener('click', async function () {
+      const userStatus = await getUserEventStatus(eventId);
+      const permissions = getEventPermissions(event, user, userStatus);
+
+      if (!permissions.canRespond) return;
+
+      const newStatus = this.dataset.status;
+      const currentStatus = await getUserEventStatus(eventId);
+
+      if (currentStatus === newStatus) {
+        await removeAttendeeStatus(eventId);
+        notifySuccess('Статус участия отменён.');
+      } else {
+        await setAttendeeStatus(eventId, null, newStatus);
+        const labels = {
+          going: 'Пойду',
+          interested: 'Может быть',
+          'not-going': 'Не пойду'
+        };
+        notifySuccess(`Ваш статус: ${labels[newStatus] || newStatus}`);
+      }
+
+      await renderAttendees(eventId, user);
+      await renderChat(event, eventId, user);
+      await updateRsvpButtons(event, eventId, user);
+      await renderPolls(event, eventId, user);
+    });
+  });
+
+  const actionsContainer = document.getElementById('eventActions');
+  const currentStatus = await getUserEventStatus(eventId);
+  const permissions = getEventPermissions(event, user, currentStatus);
+
+  if (actionsContainer && permissions.canManage) {
+    actionsContainer.innerHTML = `
+      <div class="d-flex gap-2 mt-4">
+        <a href="/edit-event/${event.id}" class="btn btn-outline-primary">Редактировать</a>
+        <button class="btn btn-outline-danger" id="deleteEventBtn">Удалить</button>
+      </div>
+    `;
+
+    document.getElementById('deleteEventBtn').addEventListener('click', async () => {
+      const freshStatus = await getUserEventStatus(eventId);
+      const freshPermissions = getEventPermissions(event, user, freshStatus);
+
+      if (!freshPermissions.canDelete) return;
+
+      const confirmed = await confirmAction(
+        'Вы уверены, что хотите удалить это мероприятие? Все записи участников, сообщения чата и опросы будут удалены.',
+        {
+          title: 'Удаление мероприятия',
+          confirmText: 'Удалить',
+          cancelText: 'Отмена',
+          confirmButtonClass: 'btn-danger'
+        }
+      );
+
+      if (!confirmed) return;
+
+      await deleteEvent(event.id);
+      await deleteEventAttendees(event.id);
+      deleteEventChat(event.id);
+      deleteEventPolls(event.id);
+
+      notifySuccess('Мероприятие успешно удалено.');
+      window.location.href = '/profile';
+    });
+  }
+
+  const chatInput = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('sendChatBtn');
+
+  if (sendBtn) {
+    sendBtn.addEventListener('click', async () => {
+      const freshStatus = await getUserEventStatus(eventId);
+      const freshPermissions = getEventPermissions(event, user, freshStatus);
+
+      if (!freshPermissions.canSendMessage) return;
+
+      const text = chatInput.value.trim();
+      if (!text) return;
+
+      const result = await saveChatMessage(eventId, { text });
+
+      if (!result.success) {
+        notifyError(result.message || 'Не удалось отправить сообщение.');
+        return;
+      }
+
+      chatInput.value = '';
+      await renderChat(event, eventId, user);
+    });
+  }
+
+  chatInput?.addEventListener('keypress', e => {
+    if (e.key === 'Enter') {
+      sendBtn?.click();
+    }
+  });
+});
+
+// login.js
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('loginForm');
+  const emailInput = document.getElementById('email');
+  const passwordInput = document.getElementById('password');
+  const authError = document.getElementById('authError');
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    if (authError) {
+      authError.style.display = 'none';
+    }
+
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    const response = await fetch('/api/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email: emailInput.value.trim(),
+        password: passwordInput.value
+      })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      if (authError) {
+        authError.textContent = data.message || 'Неверный email или пароль.';
+        authError.style.display = 'block';
+      }
+      return;
+    }
+
+    window.location.href = '/';
+  });
+});
+
+// main.js
+
+// static/js/pages/main.js
+
+import { getCurrentUser } from '../core/auth.js';
+import { filterEvents, getAllEvents } from '../services/events.service.js';
+import {
+  getUserEventStatus,
+  removeAttendeeStatus,
+  setAttendeeStatus
+} from '../services/attendees.service.js';
+import { renderEventCard } from '../ui/event-card.js';
+import { loadNavbar } from '../ui/navbar.js';
+import {
+  notify,
+  notifySuccess
+} from '../services/notifications.service.js';
+import { getGroupedReminders } from '../services/reminders.service.js';
+import { renderRemindersBlock } from '../ui/reminders.js';
+
+function renderEvents(events) {
+  const container = document.getElementById('eventsContainer');
+  if (!container) return;
+
+  if (!events.length) {
+    container.innerHTML =
+      '<p class="text-center text-muted">Мероприятия не найдены.</p>';
+    return;
+  }
+
+  container.innerHTML = events.map(renderEventCard).join('');
+}
+
+async function updateCreateButton() {
+  const container = document.getElementById('createEventContainer');
+  if (!container) return;
+
+  const user = await getCurrentUser();
+
+  container.innerHTML = user
+    ? `
+      <a href="/create-event" class="btn btn-light" id="createEventBtn">
+        + Создать мероприятие
+      </a>
+    `
+    : '';
+}
+
+async function applyFilters() {
+  const searchInput = document.getElementById('searchInput');
+  const categoryFilter = document.getElementById('categoryFilter');
+  const dateFilter = document.getElementById('dateFilter');
+
+  const query = searchInput ? searchInput.value : '';
+  const category = categoryFilter ? categoryFilter.value : '';
+  const selectedDateFilter = dateFilter ? dateFilter.value : '';
+
+  const events = await filterEvents({
+    query,
+    category,
+    dateFilter: selectedDateFilter
+  });
+
+  renderEvents(events);
+}
+
+async function renderMainReminders() {
+  const user = await getCurrentUser();
+  const container = document.getElementById('remindersContainer');
+
+  if (!container) return;
+
+  if (!user) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const grouped = await getGroupedReminders(user);
+  renderRemindersBlock(container, grouped);
+}
+
+function setupRsvpHandler() {
+  const eventsContainer = document.getElementById('eventsContainer');
+  if (!eventsContainer) return;
+
+  eventsContainer.addEventListener('click', async event => {
+    const button = event.target.closest('.btn-rsvp');
+    if (!button) return;
+
+    const user = await getCurrentUser();
+
+    if (!user) {
+      notify('Пожалуйста, войдите или зарегистрируйтесь, чтобы записаться.');
+      window.location.href = '/login';
+      return;
+    }
+
+    const eventId = Number(button.dataset.id);
+    const currentStatus = await getUserEventStatus(eventId);
+
+    if (currentStatus === 'going') {
+      await removeAttendeeStatus(eventId);
+      notify('Вы отменили участие.');
+    } else {
+      await setAttendeeStatus(eventId, null, 'going');
+      notifySuccess('Вы записались на мероприятие!');
+    }
+
+    await applyFilters();
+    await renderMainReminders();
+  });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+  await updateCreateButton();
+
+  document.getElementById('searchInput')?.addEventListener('input', applyFilters);
+  document.getElementById('categoryFilter')?.addEventListener('change', applyFilters);
+  document.getElementById('dateFilter')?.addEventListener('change', applyFilters);
+
+  await renderMainReminders();
+
+  const events = await getAllEvents();
+  renderEvents(events);
+
+  setupRsvpHandler();
+});
+
+// profile.js
+
+// static/js/pages/profile.js
+
+import { requireAuth } from '../core/auth.js';
+import { formatShortDate, getEventPlaceholderSvg } from '../core/utils.js';
+import { getAllEvents } from '../services/events.service.js';
+import { getJoinedEvents } from '../services/attendees.service.js';
+import { canManageEvent } from '../services/event-permissions.js';
+import { loadNavbar } from '../ui/navbar.js';
+import { getGroupedReminders } from '../services/reminders.service.js';
+import { renderRemindersBlock } from '../ui/reminders.js';
+
+function renderEventCard(event, user) {
+  let description = event.description || '';
+
+  if (description.length > 120) {
+    description = `${description.slice(0, 120)}...`;
+  }
+
+  const imageUrl = event.image || getEventPlaceholderSvg(320, 180, '🖼️');
+  const canManage = canManageEvent(event, user);
+
+  return `
+    <div class="event-card">
+      <a href="/event/${event.id}" class="text-decoration-none text-dark">
+        <div class="event-image-container" style="height: 180px; overflow: hidden;">
+          <img src="${imageUrl}" alt="${event.title}" class="event-image w-100 h-100" style="object-fit: cover;">
+        </div>
+
+        <div class="event-content">
+          <h3 class="event-title">${event.title}</h3>
+          <p class="event-meta">${formatShortDate(event.date)} · ${event.location}</p>
+          <p class="event-description">${description}</p>
+        </div>
+      </a>
+
+      ${
+        canManage
+          ? `
+            <div class="px-3 pb-3">
+              <a href="/edit-event/${event.id}" class="btn btn-outline-primary btn-sm w-100">
+                Редактировать
+              </a>
+            </div>
+          `
+          : ''
+      }
+    </div>
+  `;
+}
+
+function renderEvents(containerId, events, user) {
+  const container = document.getElementById(containerId);
+
+  if (!container) return;
+
+  if (!events.length) {
+    container.innerHTML = '<p class="no-events">Нет мероприятий</p>';
+    return;
+  }
+
+  container.innerHTML = events
+    .map(event => renderEventCard(event, user))
+    .join('');
+}
+
+async function renderProfileReminders(user) {
+  const container = document.getElementById('profileRemindersContainer');
+
+  if (!container) return;
+
+  const grouped = await getGroupedReminders(user);
+  renderRemindersBlock(container, grouped);
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+
+  const user = await requireAuth();
+  if (!user) return;
+
+  document.getElementById('profileName').textContent = user.fullName;
+
+  const allEvents = await getAllEvents();
+  const joinedEvents = await getJoinedEvents();
+
+  const myEvents = allEvents.filter(event => {
+    return event.organizerEmail === user.email;
+  });
+
+  await renderProfileReminders(user);
+
+  renderEvents('myEventsContainer', myEvents, user);
+  renderEvents('joinedEventsContainer', joinedEvents, user);
+});
+
+// register.js
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('registerForm');
+  const emailInput = document.getElementById('email');
+  const emailExistsError = document.getElementById('emailExistsError');
+  const password = document.getElementById('password');
+  const confirmPassword = document.getElementById('confirmPassword');
+
+  confirmPassword.addEventListener('input', () => {
+    confirmPassword.setCustomValidity(
+      password.value !== confirmPassword.value ? 'Пароли не совпадают.' : ''
+    );
+  });
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    emailExistsError?.classList.add('d-none');
+    emailInput.classList.remove('is-invalid');
+
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    const response = await fetch('/api/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        fullName: document.getElementById('fullName').value.trim(),
+        email: emailInput.value.trim(),
+        password: password.value
+      })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      emailInput.classList.add('is-invalid');
+
+      if (emailExistsError) {
+        emailExistsError.textContent = data.message || 'Ошибка регистрации.';
+        emailExistsError.classList.remove('d-none');
+      }
+
+      return;
+    }
+
+    window.location.href = '/';
+  });
+});
+
+// settings.js
+
+// static/js/pages/settings.js
+
+import { requireAuth } from '../core/auth.js';
+import { notifyError, notifySuccess } from '../services/notifications.service.js';
+import { loadNavbar } from '../ui/navbar.js';
+import {
+  updateProfile,
+  updatePassword
+} from '../services/profile.service.js';
+
+const DEFAULT_SETTINGS = {
+  toastNotificationsEnabled: true,
+  eventRemindersEnabled: true
+};
+
+function fillProfileForm(user) {
+  document.getElementById('fullName').value = user.fullName || '';
+  document.getElementById('email').value = user.email || '';
+}
+
+function fillNotificationForm(settings) {
+  document.getElementById('toastNotificationsEnabled').checked =
+    settings.toastNotificationsEnabled;
+
+  document.getElementById('eventRemindersEnabled').checked =
+    settings.eventRemindersEnabled;
+}
+
+function setupPasswordValidation() {
+  const newPassword = document.getElementById('newPassword');
+  const confirmNewPassword = document.getElementById('confirmNewPassword');
+
+  function validate() {
+    if (newPassword.value !== confirmNewPassword.value) {
+      confirmNewPassword.setCustomValidity('Пароли не совпадают.');
+    } else {
+      confirmNewPassword.setCustomValidity('');
+    }
+  }
+
+  newPassword.addEventListener('input', validate);
+  confirmNewPassword.addEventListener('input', validate);
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadNavbar();
+
+  let currentUser = await requireAuth();
+  if (!currentUser) return;
+
+  fillProfileForm(currentUser);
+  fillNotificationForm(DEFAULT_SETTINGS);
+  setupPasswordValidation();
+
+  const profileForm = document.getElementById('profileSettingsForm');
+  const passwordForm = document.getElementById('passwordSettingsForm');
+  const notificationForm = document.getElementById('notificationSettingsForm');
+  const emailExistsError = document.getElementById('emailExistsError');
+
+  profileForm.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    emailExistsError?.classList.add('d-none');
+    document.getElementById('email').classList.remove('is-invalid');
+
+    if (!profileForm.checkValidity()) {
+      profileForm.classList.add('was-validated');
+      return;
+    }
+
+    const fullName = document.getElementById('fullName').value.trim();
+    const email = document.getElementById('email').value.trim();
+
+    const result = await updateProfile({
+      fullName,
+      email
+    });
+
+    if (!result.success) {
+      document.getElementById('email').classList.add('is-invalid');
+
+      if (emailExistsError) {
+        emailExistsError.textContent =
+          result.message || 'Не удалось обновить профиль.';
+        emailExistsError.classList.remove('d-none');
+      }
+
+      notifyError(result.message || 'Не удалось обновить профиль.');
+      return;
+    }
+
+    currentUser = result.user;
+    notifySuccess('Профиль успешно обновлён.');
+  });
+
+  passwordForm.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    if (!passwordForm.checkValidity()) {
+      passwordForm.classList.add('was-validated');
+      return;
+    }
+
+    const currentPassword = document.getElementById('currentPassword').value;
+    const newPassword = document.getElementById('newPassword').value;
+
+    const result = await updatePassword({
+      currentPassword,
+      newPassword
+    });
+
+    if (!result.success) {
+      notifyError(result.message || 'Не удалось обновить пароль.');
+      return;
+    }
+
+    passwordForm.reset();
+    passwordForm.classList.remove('was-validated');
+    notifySuccess('Пароль успешно обновлён.');
+  });
+
+  notificationForm.addEventListener('submit', event => {
+    event.preventDefault();
+
+    // Пока настройки уведомлений оставляем локально на странице.
+    // Основные данные профиля и пароль уже работают через сервер.
+    notifySuccess('Настройки уведомлений сохранены.');
+  });
+});
+
+// attendees.service.js
+
+export async function getUserEventStatus(eventId) {
+  const response = await fetch(`/api/events/${eventId}/status`);
+  const data = await response.json();
+
+  return data.status;
+}
+
+export async function setAttendeeStatus(eventId, email, status) {
+  const response = await fetch(`/api/events/${eventId}/status`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ status })
+  });
+
+  return await response.json();
+}
+
+export async function removeAttendeeStatus(eventId) {
+  const response = await fetch(`/api/events/${eventId}/status`, {
+    method: 'DELETE'
+  });
+
+  return await response.json();
+}
+
+export async function getGoingCount(eventId) {
+  const response = await fetch(`/api/events/${eventId}/going-count`);
+  const data = await response.json();
+
+  return data.count;
+}
+
+export async function getJoinedEvents() {
+  const response = await fetch('/api/my/joined-events');
+  return await response.json();
+}
+
+export async function deleteEventAttendees(eventId) {
+  return { success: true };
+}
+
+// chat.service.js
+
+export async function getChatMessages(eventId) {
+  const response = await fetch(`/api/events/${eventId}/chat`);
+  return await response.json();
+}
+
+export async function saveChatMessage(eventId, messageData) {
+  const response = await fetch(`/api/events/${eventId}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      text: messageData.text
+    })
+  });
+
+  return await response.json();
+}
+
+export async function deleteEventChat(eventId) {
+  const response = await fetch(`/api/events/${eventId}/chat`, {
+    method: 'DELETE'
+  });
+
+  return await response.json();
+}
+
+// event-permissions.js
+
+export function isEventOwner(event, user) {
+  if (!event || !user) return false;
+  return event.organizerEmail === user.email;
+}
+
+export function canEditEvent(event, user) {
+  return isEventOwner(event, user);
+}
+
+export function canDeleteEvent(event, user) {
+  return isEventOwner(event, user);
+}
+
+export function canManageEvent(event, user) {
+  return isEventOwner(event, user);
+}
+
+export function canRespondToEvent(event, user) {
+  return Boolean(event && user);
+}
+
+export function canViewChat(event, user, userStatus) {
+  if (!event || !user) return false;
+  return userStatus === 'going';
+}
+
+export function canSendMessage(event, user, userStatus) {
+  return canViewChat(event, user, userStatus);
+}
+
+export function getEventPermissions(event, user, userStatus = null) {
+  const owner = isEventOwner(event, user);
+
+  return {
+    isOwner: owner,
+    canEdit: canEditEvent(event, user),
+    canDelete: canDeleteEvent(event, user),
+    canManage: canManageEvent(event, user),
+    canRespond: canRespondToEvent(event, user),
+    canViewChat: canViewChat(event, user, userStatus),
+    canSendMessage: canSendMessage(event, user, userStatus)
+  };
+}
+
+// events.service.js
+
+export async function getAllEvents() {
+  const response = await fetch('/api/events');
+  return await response.json();
+}
+
+export async function getEventById(eventId) {
+  const response = await fetch(`/api/events/${eventId}`);
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return await response.json();
+}
+
+export async function createEvent(eventData) {
+  const response = await fetch('/api/events', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(eventData)
+  });
+
+  return await response.json();
+}
+
+export async function deleteEvent(eventId) {
+  const response = await fetch(`/api/events/${eventId}`, {
+    method: 'DELETE'
+  });
+
+  return response.json();
+}
+
+export async function updateEvent(eventData) {
+  const response = await fetch(`/api/events/${eventData.id}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(eventData)
+  });
+
+  return await response.json();
+}
+
+export async function filterEvents({ query = '', category = '', dateFilter = '' }) {
+  const events = await getAllEvents();
+  const search = query.trim().toLowerCase();
+
+  return events.filter(event => {
+    const matchesSearch =
+      event.title.toLowerCase().includes(search) ||
+      event.description.toLowerCase().includes(search) ||
+      event.location.toLowerCase().includes(search);
+
+    const matchesCategory = !category || event.category === category;
+
+    return matchesSearch && matchesCategory;
+  });
+}
+
+// invite.service.js
+
+// js/services/invite.service.js
+
+import { setAttendeeStatus, getUserEventStatus } from './attendees.service.js';
+
+export function generateInviteCode(length = 12) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+
+  for (let i = 0; i < length; i += 1) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+
+  return result;
+}
+
+export function buildInviteLink(event) {
+  const url = new URL(window.location.origin + window.location.pathname.replace(/\/[^/]*$/, '//event'));
+  url.searchParams.set('id', event.id);
+  url.searchParams.set('invite', event.inviteCode);
+  return url.toString();
+}
+
+export function getInviteCodeFromUrl() {
+  return new URLSearchParams(window.location.search).get('invite');
+}
+
+export function validateInvite(event, inviteCode) {
+  if (!event || !inviteCode) return false;
+  return event.inviteCode === inviteCode;
+}
+
+export function acceptInvite(eventId, userEmail) {
+  const currentStatus = getUserEventStatus(eventId, userEmail);
+
+  if (currentStatus !== 'going') {
+    setAttendeeStatus(eventId, userEmail, 'going');
+  }
+}
+
+// notifications.service.js
+
+// js/services/notifications.service.js
+
+import { getItem } from '../core/storage.js';
+
+const TOAST_CONTAINER_ID = 'appToastContainer';
+const CONFIRM_MODAL_ID = 'appConfirmModal';
+const SETTINGS_KEY = 'userSettings';
+const CURRENT_USER_KEY = 'currentUser';
+
+function getCurrentUser() {
+  return getItem(CURRENT_USER_KEY, null);
+}
+
+function getUserSettings(email) {
+  const allSettings = getItem(SETTINGS_KEY, {});
+  return {
+    toastNotificationsEnabled: true,
+    ...(allSettings[email] || {})
+  };
+}
+
+// function areToastNotificationsEnabled() {
+//   const user = getCurrentUser();
+
+//   // Для неавторизованных пользователей toast можно не отключать
+//   if (!user) return true;
+
+//   return getUserSettings(user.email).toastNotificationsEnabled;
+// }
+
+function areToastNotificationsEnabled() {
+  return true;
+}
+
+function ensureToastContainer() {
+  let container = document.getElementById(TOAST_CONTAINER_ID);
+
+  if (!container) {
+    container = document.createElement('div');
+    container.id = TOAST_CONTAINER_ID;
+    container.className = 'toast-container position-fixed top-0 end-0 p-3';
+    container.style.zIndex = '1080';
+    document.body.appendChild(container);
+  }
+
+  return container;
+}
+
+function createToast(message, type = 'info', delay = 3000, force = false) {
+  if (!force && !areToastNotificationsEnabled()) return;
+
+  const container = ensureToastContainer();
+
+  const colorMap = {
+    info: 'text-bg-primary',
+    success: 'text-bg-success',
+    error: 'text-bg-danger',
+    warning: 'text-bg-warning'
+  };
+
+  const titleMap = {
+    info: 'Уведомление',
+    success: 'Успешно',
+    error: 'Ошибка',
+    warning: 'Внимание'
+  };
+
+  const toastEl = document.createElement('div');
+  toastEl.className = `toast align-items-center border-0 ${colorMap[type] || colorMap.info}`;
+  toastEl.setAttribute('role', 'alert');
+  toastEl.setAttribute('aria-live', 'assertive');
+  toastEl.setAttribute('aria-atomic', 'true');
+
+  toastEl.innerHTML = `
+    <div class="d-flex">
+      <div class="toast-body">
+        <div class="fw-semibold mb-1">${titleMap[type] || titleMap.info}</div>
+        <div>${message}</div>
+      </div>
+      <button
+        type="button"
+        class="btn-close btn-close-white me-2 m-auto"
+        data-bs-dismiss="toast"
+        aria-label="Закрыть"
+      ></button>
+    </div>
+  `;
+
+  container.appendChild(toastEl);
+
+  const toast = new bootstrap.Toast(toastEl, {
+    delay,
+    autohide: true
+  });
+
+  toastEl.addEventListener('hidden.bs.toast', () => {
+    toastEl.remove();
+  });
+
+  toast.show();
+}
+
+function ensureConfirmModal() {
+  let modalEl = document.getElementById(CONFIRM_MODAL_ID);
+
+  if (!modalEl) {
+    modalEl = document.createElement('div');
+    modalEl.id = CONFIRM_MODAL_ID;
+    modalEl.className = 'modal fade';
+    modalEl.tabIndex = -1;
+    modalEl.setAttribute('aria-hidden', 'true');
+
+    modalEl.innerHTML = `
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="${CONFIRM_MODAL_ID}Title">Подтверждение</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+          </div>
+          <div class="modal-body" id="${CONFIRM_MODAL_ID}Body"></div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-role="cancel">Отмена</button>
+            <button type="button" class="btn btn-danger" data-role="confirm">Подтвердить</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modalEl);
+  }
+
+  return modalEl;
+}
+
+export function notify(message, delay = 3000, options = {}) {
+  createToast(message, 'info', delay, options.force === true);
+}
+
+export function notifySuccess(message, delay = 3000, options = {}) {
+  createToast(message, 'success', delay, options.force === true);
+}
+
+export function notifyError(message = 'Произошла ошибка.', delay = 4000, options = {}) {
+  createToast(message, 'error', delay, options.force === true);
+}
+
+export function notifyWarning(message, delay = 3500, options = {}) {
+  createToast(message, 'warning', delay, options.force === true);
+}
+
+export function confirmAction(
+  message,
+  {
+    title = 'Подтверждение',
+    confirmText = 'Подтвердить',
+    cancelText = 'Отмена',
+    confirmButtonClass = 'btn-danger'
+  } = {}
+) {
+  return new Promise(resolve => {
+    const modalEl = ensureConfirmModal();
+    const titleEl = modalEl.querySelector(`#${CONFIRM_MODAL_ID}Title`);
+    const bodyEl = modalEl.querySelector(`#${CONFIRM_MODAL_ID}Body`);
+    const cancelBtn = modalEl.querySelector('[data-role="cancel"]');
+    const confirmBtn = modalEl.querySelector('[data-role="confirm"]');
+
+    titleEl.textContent = title;
+    bodyEl.textContent = message;
+    cancelBtn.textContent = cancelText;
+    confirmBtn.textContent = confirmText;
+    confirmBtn.className = `btn ${confirmButtonClass}`;
+
+    let settled = false;
+
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl, {
+      backdrop: 'static',
+      keyboard: true
+    });
+
+    const cleanup = () => {
+      confirmBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+      modalEl.removeEventListener('hidden.bs.modal', onHidden);
+    };
+
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const onConfirm = () => {
+      finish(true);
+      modal.hide();
+    };
+
+    const onCancel = () => {
+      finish(false);
+      modal.hide();
+    };
+
+    const onHidden = () => {
+      finish(false);
+    };
+
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    modalEl.addEventListener('hidden.bs.modal', onHidden);
+
+    modal.show();
+  });
+}
+
+// poll-permissions.js
+
+import { getUserEventStatus } from './attendees.service.js';
+
+export function canCreatePoll(event, user) {
+  return Boolean(event && user && event.organizerEmail === user.email);
+}
+
+export function canDeletePoll(event, user) {
+  return canCreatePoll(event, user);
+}
+
+export async function canVoteInPoll(event, user, eventId) {
+  if (!event || !user) return false;
+
+  const status = await getUserEventStatus(eventId);
+  return status === 'going';
+}
+
+// polls.service.js
+
+export async function getEventPolls(eventId) {
+  const response = await fetch(`/api/events/${eventId}/polls`);
+  return await response.json();
+}
+
+export async function createPoll(eventId, pollData) {
+  const response = await fetch(`/api/events/${eventId}/polls`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(pollData)
+  });
+
+  return await response.json();
+}
+
+export async function deletePoll(eventId, pollId) {
+  const response = await fetch(`/api/events/${eventId}/polls/${pollId}`, {
+    method: 'DELETE'
+  });
+
+  return await response.json();
+}
+
+export async function voteInPoll(eventId, pollId, userEmail, optionId) {
+  const response = await fetch(`/api/events/${eventId}/polls/${pollId}/vote`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      optionId
+    })
+  });
+
+  return await response.json();
+}
+
+export async function deleteEventPolls(eventId) {
+  const response = await fetch(`/api/events/${eventId}/polls`, {
+    method: 'DELETE'
+  });
+
+  return await response.json();
+}
+
+export function getUserPollVote(poll, userEmail) {
+  return poll?.votes?.[userEmail] || null;
+}
+
+export function getPollResults(poll) {
+  const counts = {};
+  const votes = poll?.votes || {};
+
+  for (const option of poll.options || []) {
+    counts[option.id] = 0;
+  }
+
+  Object.values(votes).forEach(optionId => {
+    if (counts[optionId] !== undefined) {
+      counts[optionId] += 1;
+    }
+  });
+
+  const totalVotes = Object.keys(votes).length;
+
+  return (poll.options || []).map(option => {
+    const voteCount = counts[option.id] || 0;
+    const percent = totalVotes === 0
+      ? 0
+      : Math.round((voteCount / totalVotes) * 100);
+
+    return {
+      optionId: option.id,
+      text: option.text,
+      voteCount,
+      percent
+    };
+  });
+}
+
+export function createPollFromFormData(eventId, currentUser, { title, type, options }) {
+  return {
+    title,
+    type,
+    options
+  };
+}
+
+// profile.service.js
+
+export async function updateProfile(data) {
+  const response = await fetch('/api/profile', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(data)
+  });
+
+  return await response.json();
+}
+
+export async function updatePassword(data) {
+  const response = await fetch('/api/profile/password', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(data)
+  });
+
+  return await response.json();
+}
+
+// reminders.service.js
+
+// static/js/services/reminders.service.js
+
+import { getAllEvents } from './events.service.js';
+import { getUserEventStatus } from './attendees.service.js';
+
+function toDate(value) {
+  return new Date(value);
+}
+
+function isValidDate(date) {
+  return date instanceof Date && !Number.isNaN(date.getTime());
+}
+
+function getHoursDiff(from, to) {
+  return (to.getTime() - from.getTime()) / (1000 * 60 * 60);
+}
+
+function isSameDay(a, b) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+export function areEventRemindersEnabled(user) {
+  return Boolean(user);
+}
+
+export function isReminderToastEnabled(user) {
+  return Boolean(user);
+}
+
+export async function getJoinedUpcomingEvents(user) {
+  if (!user || !areEventRemindersEnabled(user)) return [];
+
+  const now = new Date();
+  const events = await getAllEvents();
+
+  const joinedEvents = [];
+
+  for (const event of events) {
+    const status = await getUserEventStatus(event.id);
+
+    if (status === 'going') {
+      joinedEvents.push(event);
+    }
+  }
+
+  return joinedEvents
+    .map(event => ({
+      ...event,
+      dateObject: toDate(event.date)
+    }))
+    .filter(event => isValidDate(event.dateObject))
+    .filter(event => event.dateObject >= now)
+    .sort((a, b) => a.dateObject - b.dateObject);
+}
+
+export function getReminderBucket(eventDate, now = new Date()) {
+  const diffHours = getHoursDiff(now, eventDate);
+
+  if (diffHours < 0) return null;
+  if (isSameDay(now, eventDate)) return 'today';
+  if (diffHours <= 24) return '24h';
+  if (diffHours <= 24 * 7) return '7d';
+
+  return null;
+}
+
+export async function getUpcomingReminders(user) {
+  const now = new Date();
+  const events = await getJoinedUpcomingEvents(user);
+
+  return events
+    .map(event => {
+      const bucket = getReminderBucket(event.dateObject, now);
+      return bucket ? { ...event, reminderBucket: bucket } : null;
+    })
+    .filter(Boolean);
+}
+
+export async function getNearestReminder(user) {
+  const reminders = await getUpcomingReminders(user);
+  return reminders.length ? reminders[0] : null;
+}
+
+export function formatReminderText(event) {
+  const dateText = event.dateObject.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  if (event.reminderBucket === 'today') {
+    return `Сегодня в ${event.dateObject.toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit'
+    })} состоится мероприятие «${event.title}».`;
+  }
+
+  if (event.reminderBucket === '24h') {
+    return `В ближайшие 24 часа состоится мероприятие «${event.title}» (${dateText}).`;
+  }
+
+  return `На этой неделе у вас запланировано мероприятие «${event.title}» (${dateText}).`;
+}
+
+export function wasReminderShown(user, event) {
+  return false;
+}
+
+export function markReminderShown(user, event) {
+  return true;
+}
+
+export async function getGroupedReminders(user) {
+  const reminders = await getUpcomingReminders(user);
+
+  return {
+    today: reminders.filter(item => item.reminderBucket === 'today'),
+    next24h: reminders.filter(item => item.reminderBucket === '24h'),
+    next7d: reminders.filter(item => item.reminderBucket === '7d')
+  };
+}
+
+// users.service.js
+
+import { STORAGE_KEYS } from '../core/constants.js';
+import { getItem, setItem } from '../core/storage.js';
+
+export function getUsers() {
+  return getItem(STORAGE_KEYS.USERS, []);
+}
+
+export function isEmailRegistered(email) {
+  return getUsers().some(user => user.email === email);
+}
+
+export function findUser(email, password) {
+  return getUsers().find(
+    user => user.email === email && user.password === password
+  );
+}
+
+export function saveUser(fullName, email, password) {
+  const users = getUsers();
+  const user = { fullName, email, password };
+  users.push(user);
+  setItem(STORAGE_KEYS.USERS, users);
+  return user;
+}
+
+// event-card.js
+
+import { getCurrentUser } from '../core/auth.js';
+import { formatShortDate, getEventPlaceholderSvg } from '../core/utils.js';
+import { getGoingCount, getUserEventStatus } from '../services/attendees.service.js';
+
+export function renderEventCard(event) {
+  const currentUser = getCurrentUser();
+  const currentStatus = currentUser
+    ? getUserEventStatus(event.id, currentUser.email)
+    : null;
+
+  let description = event.description || '';
+  if (description.length > 120) {
+    description = `${description.slice(0, 120)}...`;
+  }
+
+  const imageUrl = event.image || getEventPlaceholderSvg(320, 180, '🖼️');
+
+  return `
+    <div class="event-card">
+      <a href="/event/${event.id}" class="text-decoration-none text-dark">
+        <div class="event-image-container" style="height: 180px; overflow: hidden;">
+          <img src="${imageUrl}" alt="${event.title}" class="event-image w-100 h-100" style="object-fit: cover;">
+        </div>
+        <div class="event-content">
+          <h3 class="event-title">${event.title}</h3>
+          <p class="event-meta">${formatShortDate(event.date)} · ${event.location}</p>
+          <p class="event-description">${description}</p>
+        </div>
+      </a>
+      <div class="px-3 pb-3">
+        <button class="btn-rsvp" data-id="${event.id}">
+          ${currentStatus === 'going' ? '✅ Записан(а)' : 'Пойду'}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+// event-form.js
+
+// js/ui/event-form.js
+
+import { imageToBase64 } from '../core/utils.js';
+
+export function setMinDateTime(inputId = 'date') {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+
+  input.min = `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+export function setupImagePreview({
+  fileInputId = 'imageUpload',
+  previewContainerId = 'imagePreview',
+  alt = 'Предпросмотр'
+} = {}) {
+  const fileInput = document.getElementById(fileInputId);
+  const preview = document.getElementById(previewContainerId);
+
+  if (!fileInput || !preview) return;
+
+  fileInput.addEventListener('change', function () {
+    preview.innerHTML = '';
+
+    const file = this.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = e => {
+      preview.innerHTML = `
+        <img
+          src="${e.target.result}"
+          alt="${alt}"
+          class="img-thumbnail"
+          style="max-height: 200px;"
+        >
+      `;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+export function renderCurrentImage(image, previewContainerId = 'imagePreview') {
+  const preview = document.getElementById(previewContainerId);
+  if (!preview || !image) return;
+
+  preview.innerHTML = `
+    <img
+      src="${image}"
+      alt="Текущее изображение"
+      class="img-thumbnail"
+      style="max-height: 200px;"
+    >
+  `;
+}
+
+export function validateImageFile(file, maxSizeMb = 2) {
+  if (!file) {
+    return { valid: true };
+  }
+
+  const maxSize = maxSizeMb * 1024 * 1024;
+
+  if (file.size > maxSize) {
+    return {
+      valid: false,
+      message: `Файл слишком большой. Максимальный размер — ${maxSizeMb} МБ.`
+    };
+  }
+
+  if (!file.type.startsWith('image/')) {
+    return {
+      valid: false,
+      message: 'Можно загружать только изображения.'
+    };
+  }
+
+  return { valid: true };
+}
+
+export function fillEventForm(event) {
+  const eventIdInput = document.getElementById('eventId');
+  const titleInput = document.getElementById('title');
+  const descriptionInput = document.getElementById('description');
+  const dateInput = document.getElementById('date');
+  const locationInput = document.getElementById('location');
+  const categoryInput = document.getElementById('category');
+  const latitudeInput = document.getElementById('latitude');
+  const longitudeInput = document.getElementById('longitude');
+
+  if (eventIdInput) eventIdInput.value = event.id ?? '';
+  if (titleInput) titleInput.value = event.title ?? '';
+  if (descriptionInput) descriptionInput.value = event.description ?? '';
+  if (dateInput) dateInput.value = event.date ?? '';
+  if (locationInput) locationInput.value = event.location ?? '';
+  if (categoryInput) categoryInput.value = event.category ?? '';
+  if (latitudeInput) latitudeInput.value = event.latitude ?? '';
+  if (longitudeInput) longitudeInput.value = event.longitude ?? '';
+
+  if (event.image) {
+    renderCurrentImage(event.image);
+  }
+}
+
+export async function resolveEventImage({
+  fileInputId = 'imageUpload',
+  fallbackImage = ''
+} = {}) {
+  const file = document.getElementById(fileInputId)?.files?.[0];
+
+  if (!file) {
+    return fallbackImage;
+  }
+
+  return imageToBase64(file);
+}
+
+export function getEventFormData({
+  formId,
+  currentUser,
+  eventId = null,
+  image = ''
+}) {
+  const form = document.getElementById(formId);
+  if (!form) {
+    throw new Error(`Форма с id="${formId}" не найдена`);
+  }
+
+  const title = form.querySelector('#title')?.value.trim() || '';
+  const description = form.querySelector('#description')?.value.trim() || '';
+  const date = form.querySelector('#date')?.value || '';
+  const location = form.querySelector('#location')?.value.trim() || '';
+  const category = form.querySelector('#category')?.value || '';
+
+  const latitudeRaw = form.querySelector('#latitude')?.value.trim() || '';
+  const longitudeRaw = form.querySelector('#longitude')?.value.trim() || '';
+
+  const latitude = latitudeRaw === '' ? null : Number(latitudeRaw);
+  const longitude = longitudeRaw === '' ? null : Number(longitudeRaw);
+
+  return {
+    id: eventId,
+    title,
+    description,
+    date,
+    location,
+    category,
+    organizer: currentUser.fullName,
+    organizerEmail: currentUser.email,
+    image,
+    latitude: Number.isFinite(latitude) ? latitude : null,
+    longitude: Number.isFinite(longitude) ? longitude : null
+  };
+}
+
+// navbar.js
+
+import { getCurrentUser, logout } from '../core/auth.js';
+import { getUserInitials } from '../core/utils.js';
+
+export async function loadNavbar() {
+  try {
+    const response = await fetch('/static/components/navbar.html');
+    const html = await response.text();
+
+    document.body.insertAdjacentHTML('afterbegin', html);
+    await updateNavbarUI();
+  } catch (error) {
+    console.error('Не удалось загрузить navbar:', error);
+
+    document.body.insertAdjacentHTML('afterbegin', `
+      <nav class="navbar navbar-expand-lg app-navbar">
+        <div class="container">
+          <a class="navbar-brand" href="/">EventPlanner</a>
+          <div class="d-flex align-items-center" id="authNav"></div>
+        </div>
+      </nav>
+    `);
+
+    await updateNavbarUI();
+  }
+}
+
+export async function updateNavbarUI() {
+  const authNav = document.getElementById('authNav');
+  if (!authNav) return;
+
+  const user = await getCurrentUser();
+
+  if (user) {
+    const initials = getUserInitials(user.fullName);
+
+    authNav.innerHTML = `
+      <div class="dropdown">
+        <a href="#" class="d-flex align-items-center text-decoration-none dropdown-toggle" data-bs-toggle="dropdown">
+          <div class="user-avatar me-2">
+            <span>${initials}</span>
+          </div>
+          <span class="user-info">${user.fullName}</span>
+        </a>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="/profile">Профиль</a></li>
+          <li><a class="dropdown-item" href="/calendar">Календарь</a></li>
+          <li><a class="dropdown-item" href="/settings">Настройки</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item text-danger" href="#" id="logoutBtn">Выйти</a></li>
+        </ul>
+      </div>
+    `;
+
+    document.getElementById('logoutBtn')?.addEventListener('click', async event => {
+      event.preventDefault();
+      await logout();
+      window.location.href = '/';
+    });
+  } else {
+    authNav.innerHTML = `<a href="/login" class="btn btn-outline-primary btn-sm">Войти</a>`;
+  }
+}
+
+// polls.js
+
+// js/ui/polls.js
+
+import { getPollResults, getUserPollVote } from '../services/polls.service.js';
+
+function getPollTypeLabel(type) {
+  const labels = {
+    time: 'Выбор времени',
+    location: 'Выбор места',
+    custom: 'Опрос'
+  };
+
+  return labels[type] || 'Опрос';
+}
+
+export function renderPollsList(container, polls, currentUser, permissions = {}) {
+  const { canVote = false, canDelete = false } = permissions;
+
+  if (!container) return;
+
+  if (!polls.length) {
+    container.innerHTML = '<p class="text-muted">Пока нет опросов.</p>';
+    return;
+  }
+
+  container.innerHTML = polls.map(poll => {
+    const results = getPollResults(poll);
+    const currentVote = currentUser
+      ? getUserPollVote(poll, currentUser.email)
+      : null;
+
+    const maxVotes = Math.max(...results.map(r => r.voteCount || 0), 0);
+
+    return `
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+            <div>
+              <h5 class="mb-1">${poll.title}</h5>
+              <div class="text-muted small">${getPollTypeLabel(poll.type)}</div>
+            </div>
+
+            ${
+              canDelete
+                ? `
+                  <button
+                    class="btn btn-outline-danger btn-sm poll-delete-btn"
+                    data-poll-id="${poll.id}"
+                  >
+                    Удалить
+                  </button>
+                `
+                : ''
+            }
+          </div>
+
+          <div class="mt-3">
+            ${(poll.options || []).map(option => {
+              const result = results.find(item => item.optionId === option.id);
+
+              const voteCount = result?.voteCount || 0;
+              const percent = result?.percent || 0;
+
+              const isChecked = Number(currentVote) === Number(option.id);
+              const isLeader = voteCount === maxVotes && maxVotes > 0;
+
+              return `
+                <div class="border rounded p-2 mb-2
+                  ${isLeader ? 'border-primary bg-light' : ''}
+                  ${isChecked ? 'border-success' : ''}">
+                  
+                  <label class="d-flex align-items-center gap-2 mb-2">
+                    <input
+                      type="radio"
+                      name="poll-${poll.id}"
+                      value="${option.id}"
+                      class="poll-option-input"
+                      data-poll-id="${poll.id}"
+                      ${isChecked ? 'checked' : ''}
+                      ${canVote ? '' : 'disabled'}
+                    >
+                    <span>${option.text}</span>
+                  </label>
+
+                  ${isChecked ? '<div class="text-success small">✔ Ваш выбор</div>' : ''}
+                  ${isLeader ? '<div class="text-primary small">🏆 Лидер голосования</div>' : ''}
+
+                  <div class="progress mt-2" style="height: 10px;">
+                    <div
+                      class="progress-bar"
+                      role="progressbar"
+                      style="width: ${percent}%"
+                      aria-valuenow="${percent}"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                    ></div>
+                  </div>
+
+                  <div class="small text-muted mt-1">
+                    ${voteCount} голос(ов) · ${percent}%
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          ${
+            !canVote
+              ? '<div class="small text-muted mt-2">Голосовать могут только участники мероприятия со статусом «Пойду».</div>'
+              : ''
+          }
+        </div>
+      </div>
+    `;
+  }).join('')
+}
+
+export function togglePollDeleteButtons(container, visible) {
+  if (!container) return;
+
+  container.querySelectorAll('.poll-delete-btn').forEach(button => {
+    button.style.display = visible ? '' : 'none';
+  });
+}
+
+export function setupPollOptionsPreview(containerId = 'pollOptionsPreview') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  container.innerHTML = `
+    <div class="mb-2">
+      <input type="text" class="form-control poll-option-field" placeholder="Вариант 1">
+    </div>
+    <div class="mb-2">
+      <input type="text" class="form-control poll-option-field" placeholder="Вариант 2">
+    </div>
+  `;
+}
+
+export function addPollOptionField(containerId = 'pollOptionsPreview') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const count = container.querySelectorAll('.poll-option-field').length + 1;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'mb-2';
+  wrapper.innerHTML = `
+    <input type="text" class="form-control poll-option-field" placeholder="Вариант ${count}">
+  `;
+
+  container.appendChild(wrapper);
+}
+
+export function getPollFormData() {
+  const title = document.getElementById('pollTitle')?.value.trim() || '';
+  const type = document.getElementById('pollType')?.value || 'custom';
+
+  const options = Array.from(document.querySelectorAll('.poll-option-field'))
+    .map(input => input.value.trim())
+    .filter(Boolean);
+
+  return { title, type, options };
+}
+
+export function resetPollForm() {
+  const titleInput = document.getElementById('pollTitle');
+  const typeSelect = document.getElementById('pollType');
+
+  if (titleInput) titleInput.value = '';
+  if (typeSelect) typeSelect.value = 'custom';
+
+  setupPollOptionsPreview();
+}
+
+// reminders.js
+
+// js/ui/reminders.js
+
+import { formatShortDate } from '../core/utils.js';
+
+function renderReminderList(title, items, badgeClass = 'bg-primary') {
+  if (!items.length) return '';
+
+  return `
+    <div class="card reminder-card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0">${title}</h5>
+          <span class="badge ${badgeClass}">${items.length}</span>
+        </div>
+
+        <div class="list-group list-group-flush">
+          ${items.map(event => `
+            <a
+              href="/event/${event.id}"
+              class="list-group-item list-group-item-action px-0"
+            >
+              <div class="fw-semibold">${event.title}</div>
+              <div class="small text-muted">${formatShortDate(event.date)} · ${event.location}</div>
+            </a>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export function renderRemindersBlock(container, groupedReminders) {
+  if (!container) return;
+
+  const total =
+    groupedReminders.today.length +
+    groupedReminders.next24h.length +
+    groupedReminders.next7d.length;
+
+  if (!total) {
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = `
+    <section class="reminders-section mb-4">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <div>
+          <h3 class="mb-1">Напоминания</h3>
+          <p class="text-muted mb-0">Ваши ближайшие мероприятия</p>
+        </div>
+      </div>
+
+      ${renderReminderList('Сегодня', groupedReminders.today, 'bg-danger')}
+      ${renderReminderList('В ближайшие 24 часа', groupedReminders.next24h, 'bg-warning text-dark')}
+      ${renderReminderList('На этой неделе', groupedReminders.next7d, 'bg-primary')}
+    </section>
+  `;
+}
+
+// render.js
+
+export function renderEmpty(container, text) {
+  container.innerHTML = `<p class="text-center text-muted">${text}</p>`;
+}
+
+export function renderHtml(container, html) {
+  container.innerHTML = html;
+}
+
+// calendar.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Календарь событий — EventPlanner</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/calendar.css') }}">
+
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.20/main.min.css" rel="stylesheet" />
+</head>
+<body>
+  <div class="container py-4">
+    <div class="calendar-page-header mb-4">
+      <div>
+        <h1 class="mb-1">Календарь событий</h1>
+        <p class="text-muted mb-0">Просматривайте запланированные мероприятия по датам</p>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="/" class="btn btn-outline-primary">Каталог</a>
+        <a href="/profile" class="btn btn-primary">Профиль</a>
+      </div>
+    </div>
+
+    <div class="calendar-card mb-3">
+      <div class="calendar-filters">
+        <div>
+          <label for="ownershipFilter" class="form-label">Показывать</label>
+          <select id="ownershipFilter" class="form-select">
+            <option value="all">Все мероприятия</option>
+            <option value="my">Мои мероприятия</option>
+            <option value="joined">Я записан</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="categoryFilter" class="form-label">Категория</label>
+          <select id="categoryFilter" class="form-select">
+            <option value="">Все категории</option>
+            <option value="tech">Технологии</option>
+            <option value="health">Здоровье и спорт</option>
+            <option value="culture">Культура и искусство</option>
+            <option value="business">Бизнес и карьера</option>
+            <option value="hobby">Хобби и творчество</option>
+          </select>
+        </div>
+
+        <div class="calendar-filter-actions">
+          <button id="resetCalendarFiltersBtn" class="btn btn-outline-secondary" type="button">
+            Сбросить
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="calendar-card">
+      <div id="calendar"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.20/index.global.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@fullcalendar/core@6.1.20/locales-all.global.min.js"></script>
+
+  <script type="module" src="{{ url_for('static', filename='js/pages/calendar.js') }}"></script>
+</body>
+</html>
+
+// create-event.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Создать мероприятие — EventPlanner</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  
+  <!-- Стили -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/create-event.css') }}">
+
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">← Вернуться в каталог</a>
+
+    <div class="form-container">
+      <h1 class="page-title">Создать новое мероприятие</h1>
+
+      <form id="createEventForm" novalidate enctype="multipart/form-data">
+        <div class="mb-3">
+          <label for="title" class="form-label">Название *</label>
+          <input type="text" class="form-control" id="title" required minlength="5" maxlength="100" placeholder="Например: Вечер Python-разработчиков">
+          <div class="invalid-feedback">Укажите название (минимум 5 символов)</div>
+        </div>
+
+        <div class="mb-3">
+          <label for="description" class="form-label">Описание *</label>
+          <textarea class="form-control" id="description" rows="4" required minlength="20" placeholder="Расскажите подробнее о мероприятии..."></textarea>
+          <div class="invalid-feedback">Описание должно содержать минимум 20 символов</div>
+        </div>
+
+        <!-- Поле загрузки изображения -->
+        <div class="mb-3">
+          <label for="imageUpload" class="form-label">Фотография мероприятия (опционально)</label>
+          <input type="file" class="form-control" id="imageUpload" accept="image/*">
+          <div class="form-text">Поддерживаются JPG, PNG (макс. 2 МБ)</div>
+          <div id="imagePreview" class="mt-2"></div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label for="date" class="form-label">Дата и время *</label>
+            <input type="datetime-local" class="form-control" id="date" required>
+            <div class="invalid-feedback">Укажите дату и время</div>
+          </div>
+
+          <div class="col-md-6 mb-3">
+            <label for="location" class="form-label">Место проведения *</label>
+            <input type="text" class="form-control" id="location" required placeholder="Адрес или название места">
+            <div class="invalid-feedback">Укажите место проведения</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label for="latitude" class="form-label">Широта (опционально)</label>
+            <input
+              type="number"
+              class="form-control"
+              id="latitude"
+              step="any"
+              min="-90"
+              max="90"
+              placeholder="Например: 55.7558"
+            >
+          </div>
+
+          <div class="col-md-6 mb-3">
+            <label for="longitude" class="form-label">Долгота (опционально)</label>
+            <input
+              type="number"
+              class="form-control"
+              id="longitude"
+              step="any"
+              min="-180"
+              max="180"
+              placeholder="Например: 37.6176"
+            >
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label for="category" class="form-label">Категория *</label>
+          <select class="form-select" id="category" required>
+            <option value="">Выберите категорию</option>
+            <option value="tech">Технологии</option>
+            <option value="health">Здоровье и спорт</option>
+            <option value="culture">Культура и искусство</option>
+            <option value="business">Бизнес и карьера</option>
+            <option value="hobby">Хобби и творчество</option>
+          </select>
+          <div class="invalid-feedback">Выберите категорию</div>
+        </div>
+
+        <button type="submit" class="btn btn-create w-100">Создать мероприятие</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script type="module" src="{{ url_for('static', filename='js/pages/create-event.js') }}"></script>
+</body>
+</html>
+
+// edit-event.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Редактировать мероприятие — EventPlanner</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  
+  <!-- Стили -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/create-event.css') }}">
+
+</head>
+<body>
+  <div class="container">
+    <a href="javascript:history.back()" class="back-link">← Вернуться назад</a>
+
+    <div class="form-container">
+      <h1 class="page-title">Редактировать мероприятие</h1>
+
+      <form id="editEventForm" novalidate enctype="multipart/form-data">
+        <input type="hidden" id="eventId" />
+
+        <div class="mb-3">
+          <label for="title" class="form-label">Название *</label>
+          <input type="text" class="form-control" id="title" required minlength="5" maxlength="100">
+          <div class="invalid-feedback">Укажите название (минимум 5 символов)</div>
+        </div>
+
+        <div class="mb-3">
+          <label for="description" class="form-label">Описание *</label>
+          <textarea class="form-control" id="description" rows="4" required minlength="20"></textarea>
+          <div class="invalid-feedback">Описание должно содержать минимум 20 символов</div>
+        </div>
+
+        <!-- Поле загрузки изображения -->
+        <div class="mb-3">
+          <label for="imageUpload" class="form-label">Фотография мероприятия (опционально)</label>
+          <input type="file" class="form-control" id="imageUpload" accept="image/*">
+          <div class="form-text">Поддерживаются JPG, PNG (макс. 2 МБ)</div>
+          <div id="imagePreview" class="mt-2"></div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label for="date" class="form-label">Дата и время *</label>
+            <input type="datetime-local" class="form-control" id="date" required>
+            <div class="invalid-feedback">Укажите дату и время</div>
+          </div>
+
+          <div class="col-md-6 mb-3">
+            <label for="location" class="form-label">Место проведения *</label>
+            <input type="text" class="form-control" id="location" required>
+            <div class="invalid-feedback">Укажите место проведения</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label for="latitude" class="form-label">Широта (опционально)</label>
+            <input
+              type="number"
+              class="form-control"
+              id="latitude"
+              step="any"
+              min="-90"
+              max="90"
+              placeholder="Например: 55.7558"
+            >
+          </div>
+
+          <div class="col-md-6 mb-3">
+            <label for="longitude" class="form-label">Долгота (опционально)</label>
+            <input
+              type="number"
+              class="form-control"
+              id="longitude"
+              step="any"
+              min="-180"
+              max="180"
+              placeholder="Например: 37.6176"
+            >
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label for="category" class="form-label">Категория *</label>
+          <select class="form-select" id="category" required>
+            <option value="">Выберите категорию</option>
+            <option value="tech">Технологии</option>
+            <option value="health">Здоровье и спорт</option>
+            <option value="culture">Культура и искусство</option>
+            <option value="business">Бизнес и карьера</option>
+            <option value="hobby">Хобби и творчество</option>
+          </select>
+          <div class="invalid-feedback">Выберите категорию</div>
+        </div>
+
+        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+          <button type="button" class="btn btn-outline-danger" id="deleteEventBtn">Удалить</button>
+          <button type="submit" class="btn btn-create">Сохранить изменения</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script type="module" src="{{ url_for('static', filename='js/pages/edit-event.js') }}"></script>
+</body>
+</html>
+
+// event.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title id="pageTitle">Мероприятие — EventPlanner</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.css"
+  />
+
+  <!-- Стили страницы -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/event.css') }}">
+</head>
+<body>
+  <!-- Навбар будет загружен через JS -->
+
+  <!-- Заголовок мероприятия -->
+  <header class="event-header">
+    <div class="container">
+      <h1 id="eventTitle" class="event-title">Загрузка...</h1>
+      <div class="event-meta">
+        <span id="eventDate">—</span>
+        <span id="eventLocation">—</span>
+        <span>Организатор: <span id="eventOrganizer">—</span></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Изображение мероприятия -->
+  <div class="event-image-container" style="height: 300px; overflow: hidden; margin-bottom: 2rem;">
+    <!-- Изображение будет вставлено через JS -->
+  </div>
+
+  <div class="event-content" id="eventContent">
+    <!-- Описание -->
+    <div class="event-description">
+      <h2>О мероприятии</h2>
+      <p id="eventDescription">Загрузка...</p>
+    </div>
+
+    <!-- Место -->
+    <h2>Место проведения</h2>
+    <div id="mapPlaceholder" class="mb-3"></div>
+    <div id="eventMap"></div>
+
+    <!-- RSVP -->
+    <h2>Участвуете?</h2>
+    <div class="rsvp-buttons">
+      <button class="rsvp-btn going" data-status="going">Пойду</button>
+      <button class="rsvp-btn interested" data-status="interested">Может быть</button>
+      <button class="rsvp-btn not-going" data-status="not-going">Не пойду</button>
+    </div>
+
+    <!-- Участники -->
+    <div class="attendees-section">
+      <h3>Участники (<span id="attendeesCount">0</span>)</h3>
+      <div id="attendeesList" class="attendees-list">
+        <!-- Список участников -->
+      </div>
+    </div>
+
+    <!-- Кнопки управления -->
+    <div id="eventActions" class="mt-4"></div>
+    
+    <!-- Приглашения -->
+    <div id="inviteSection" class="mt-3"></div>
+    <div id="inviteNotice" class="mt-3"></div>
+
+    <!-- Вкладки -->
+    <ul class="nav nav-tabs" id="eventTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link active"
+          id="discussion-tab"
+          data-bs-toggle="tab"
+          data-bs-target="#discussion"
+          type="button"
+          role="tab"
+          aria-controls="discussion"
+          aria-selected="true"
+        >
+          Обсуждение
+        </button>
+      </li>
+
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          id="polls-tab"
+          data-bs-toggle="tab"
+          data-bs-target="#polls"
+          type="button"
+          role="tab"
+          aria-controls="polls"
+          aria-selected="false"
+        >
+          Опросы
+        </button>
+      </li>
+    </ul>
+
+    <div class="tab-content" id="eventTabContent">
+      <!-- Вкладка обсуждения -->
+      <div
+        class="tab-pane fade show active"
+        id="discussion"
+        role="tabpanel"
+        aria-labelledby="discussion-tab"
+        tabindex="0"
+      >
+        <div class="chat-messages" id="chatMessages">
+          <!-- Сообщения будут здесь -->
+        </div>
+
+        <div class="chat-input mt-3">
+          <div class="input-group">
+            <input
+              type="text"
+              class="form-control"
+              id="chatInput"
+              placeholder="Напишите сообщение..."
+              maxlength="280"
+            >
+            <button class="btn btn-primary" id="sendChatBtn" type="button">
+              Отправить
+            </button>
+          </div>
+          <small class="text-muted mt-1 d-block">Только для участников мероприятия</small>
+        </div>
+      </div>
+
+      <!-- Вкладка опросов -->
+      <div
+        class="tab-pane fade"
+        id="polls"
+        role="tabpanel"
+        aria-labelledby="polls-tab"
+        tabindex="0"
+      >
+        <div class="polls-section mt-3">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <h3 class="mb-0">Голосования</h3>
+            <button class="btn btn-outline-primary btn-sm" id="showPollFormBtn" type="button">
+              Создать опрос
+            </button>
+          </div>
+
+          <div id="pollFormContainer" class="card mb-3" style="display: none;">
+            <div class="card-body">
+              <h5 class="card-title">Новый опрос</h5>
+
+              <div class="mb-3">
+                <label for="pollTitle" class="form-label">Название опроса</label>
+                <input
+                  type="text"
+                  id="pollTitle"
+                  class="form-control"
+                  placeholder="Например: Выберите удобное время"
+                >
+              </div>
+
+              <div class="mb-3">
+                <label for="pollType" class="form-label">Тип</label>
+                <select id="pollType" class="form-select">
+                  <option value="custom">Обычный опрос</option>
+                  <option value="time">Выбор времени</option>
+                  <option value="location">Выбор места</option>
+                </select>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label">Варианты</label>
+                <div id="pollOptionsPreview"></div>
+                <button class="btn btn-outline-secondary btn-sm mt-2" id="addPollOptionBtn" type="button">
+                  + Добавить вариант
+                </button>
+              </div>
+
+              <div class="d-flex gap-2">
+                <button class="btn btn-primary" id="createPollBtn" type="button">Создать</button>
+                <button class="btn btn-outline-secondary" id="cancelPollBtn" type="button">Отмена</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="pollsContainer">
+            <!-- Опросы будут здесь -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script src="https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.js"></script>
+
+  <!-- Логика страницы -->
+  <script type="module" src="{{ url_for('static', filename='js/pages/event.js') }}"></script>
+</body>
+</html>
+
+// index.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EventPlanner — Найдите своё сообщество</title>
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+</head>
+
+<body>
+  <section class="hero">
+    <div class="container">
+      <h1>Найдите мероприятия по интересам рядом с вами</h1>
+
+      <div class="search-container">
+        <input
+          type="text"
+          id="searchInput"
+          class="form-control"
+          placeholder="Поиск мероприятий..."
+        />
+      </div>
+
+      <div id="createEventContainer" class="mt-3">
+        <a href="/create-event" class="btn btn-light">
+          + Создать мероприятие
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="container mt-4">
+    <div id="remindersContainer"></div>
+  </section>
+
+  <main class="container mt-4">
+    <div id="eventsContainer" class="events-grid">
+      <!-- События будут добавлены через JS -->
+    </div>
+  </main>
+  
+  <main class="container mt-4">
+    <div id="eventsContainer" class="events-grid"></div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/pages/main.js') }}"
+  ></script>
+</body>
+</html>
+
+// login.html
+
+<!-- templates/login.html -->
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+  <title>Вход | EventPlanner</title>
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  >
+
+  <link
+    rel="stylesheet"
+    href="{{ url_for('static', filename='css/auth.css') }}"
+  >
+</head>
+
+<body>
+
+  <div id="navbar"></div>
+
+  <div class="container">
+    <div class="form-container shadow">
+
+      <h2 class="text-center mb-4">Вход</h2>
+
+      <form id="loginForm" novalidate>
+
+        <div class="mb-3">
+          <label for="email" class="form-label">
+            Email
+          </label>
+
+          <input
+            type="email"
+            class="form-control"
+            id="email"
+            placeholder="Введите email"
+            required
+          >
+        </div>
+
+        <div class="mb-3">
+          <label for="password" class="form-label">
+            Пароль
+          </label>
+
+          <input
+            type="password"
+            class="form-control"
+            id="password"
+            placeholder="Введите пароль"
+            required
+          >
+        </div>
+
+        <!-- Блок ошибки -->
+        <div
+          id="authError"
+          class="alert alert-danger"
+          style="display: none;"
+        >
+          Неверный email или пароль.
+        </div>
+
+        <button
+          type="submit"
+          class="btn btn-primary w-100"
+        >
+          Войти
+        </button>
+
+      </form>
+
+      <div class="text-center mt-3">
+        <span>Нет аккаунта?</span>
+
+        <a href="/register">
+          Зарегистрироваться
+        </a>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Bootstrap -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js">
+  </script>
+
+  <!-- Navbar -->
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/ui/navbar.js') }}">
+  </script>
+
+  <!-- Login -->
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/pages/login.js') }}">
+  </script>
+
+</body>
+</html>
+
+// profile.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Мой профиль — EventPlanner</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  
+  <!-- Стили -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}">
+</head>
+<body>
+  <div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+      <div>
+        <h1 id="profileName">Мой профиль</h1>
+        <p class="text-muted mb-0">Управляйте своими мероприятиями и участием</p>
+      </div>
+      <a href="/calendar" class="btn btn-outline-primary">Открыть календарь</a>
+    </div>
+
+    <div id="profileRemindersContainer" class="mb-4"></div>
+
+    <!-- Вкладки -->
+    <ul class="nav nav-tabs" id="profileTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="my-events-tab" data-bs-toggle="tab" data-bs-target="#my-events" type="button">
+          Мои мероприятия
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="joined-events-tab" data-bs-toggle="tab" data-bs-target="#joined-events" type="button">
+          Записан(а)
+        </button>
+      </li>
+    </ul>
+
+    <!-- Содержимое вкладок -->
+    <div class="tab-content mt-4" id="profileTabContent">
+      <!-- Мои мероприятия -->
+      <div class="tab-pane fade show active" id="my-events" role="tabpanel">
+        <div id="myEventsContainer" class="events-grid">
+          <!-- События будут здесь -->
+        </div>
+      </div>
+
+      <!-- Записан(а) -->
+      <div class="tab-pane fade" id="joined-events" role="tabpanel">
+        <div id="joinedEventsContainer" class="events-grid">
+          <!-- События будут здесь -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script type="module" src="{{ url_for('static', filename='js/pages/profile.js') }}"></script>
+</body>
+</html>
+
+// register.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Регистрация — EventPlanner</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+  
+  <!-- Внешний CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body>
+  <div class="container">
+    <div class="form-container">
+      <div class="logo">
+        <h1>EventPlanner</h1>
+        <p class="text-muted">Создавайте и организуйте мероприятия вместе</p>
+      </div>
+
+      <form id="registerForm" novalidate>
+        <!-- Имя -->
+        <div class="mb-3">
+          <label for="fullName" class="form-label">Полное имя</label>
+          <input
+            type="text"
+            class="form-control"
+            id="fullName"
+            placeholder="Иван Петров"
+            required
+          />
+          <div class="invalid-feedback">Пожалуйста, укажите ваше имя.</div>
+        </div>
+
+        <!-- Email -->
+        <div class="mb-3">
+          <label for="email" class="form-label">Email</label>
+          <input
+            type="email"
+            class="form-control"
+            id="email"
+            placeholder="example@mail.com"
+            required
+          />
+          <div class="invalid-feedback">Пожалуйста, введите корректный email.</div>
+          <div id="emailExistsError" class="invalid-feedback d-none">
+            Пользователь с таким email уже существует.
+          </div>
+        </div>
+
+        <!-- Пароль -->
+        <div class="mb-3">
+          <label for="password" class="form-label">Пароль</label>
+          <input
+            type="password"
+            class="form-control"
+            id="password"
+            minlength="6"
+            placeholder="Не менее 6 символов"
+            required
+          />
+          <div class="invalid-feedback">
+            Пароль должен содержать минимум 6 символов.
+          </div>
+        </div>
+
+        <!-- Подтверждение пароля -->
+        <div class="mb-3">
+          <label for="confirmPassword" class="form-label">Подтвердите пароль</label>
+          <input
+            type="password"
+            class="form-control"
+            id="confirmPassword"
+            placeholder="Повторите пароль"
+            required
+          />
+          <div class="invalid-feedback">Пароли должны совпадать.</div>
+        </div>
+
+        <!-- Кнопка отправки -->
+        <div class="d-grid">
+          <button class="btn btn-primary btn-lg" type="submit">
+            Зарегистрироваться
+          </button>
+        </div>
+
+        <!-- Ссылка на вход -->
+        <div class="text-center mt-3">
+          <p class="mb-0">
+            Уже есть аккаунт? <a href="/login" class="text-decoration-none">Войти</a>
+          </p>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script type="module" src="{{ url_for('static', filename='js/pages/register.js') }}"></script>
+</body>
+</html>
+
+// settings.html
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Настройки — EventPlanner</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+</head>
+<body>
+  <div class="container py-4">
+    <div class="settings-header mb-4">
+      <div>
+        <h1 class="mb-1">Настройки</h1>
+        <p class="text-muted mb-0">Управляйте профилем и параметрами уведомлений</p>
+      </div>
+      <a href="/profile" class="btn btn-outline-primary">← Назад в профиль</a>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="settings-card">
+          <h3 class="settings-card-title">Профиль</h3>
+
+          <form id="profileSettingsForm" novalidate>
+            <div class="mb-3">
+              <label for="fullName" class="form-label">Полное имя</label>
+              <input type="text" class="form-control" id="fullName" required minlength="2" />
+              <div class="invalid-feedback">Введите имя.</div>
+            </div>
+
+            <div class="mb-3">
+              <label for="email" class="form-label">Email</label>
+              <input type="email" class="form-control" id="email" required />
+              <div class="invalid-feedback">Введите корректный email.</div>
+              <div id="emailExistsError" class="invalid-feedback d-none">
+                Пользователь с таким email уже существует.
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Сохранить профиль</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="col-lg-6">
+        <div class="settings-card">
+          <h3 class="settings-card-title">Смена пароля</h3>
+
+          <form id="passwordSettingsForm" novalidate>
+            <div class="mb-3">
+              <label for="currentPassword" class="form-label">Текущий пароль</label>
+              <input type="password" class="form-control" id="currentPassword" required />
+              <div class="invalid-feedback">Введите текущий пароль.</div>
+            </div>
+
+            <div class="mb-3">
+              <label for="newPassword" class="form-label">Новый пароль</label>
+              <input type="password" class="form-control" id="newPassword" minlength="6" required />
+              <div class="invalid-feedback">Новый пароль должен содержать минимум 6 символов.</div>
+            </div>
+
+            <div class="mb-3">
+              <label for="confirmNewPassword" class="form-label">Подтвердите новый пароль</label>
+              <input type="password" class="form-control" id="confirmNewPassword" required />
+              <div class="invalid-feedback">Пароли должны совпадать.</div>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Обновить пароль</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="settings-card">
+          <h3 class="settings-card-title">Уведомления</h3>
+
+          <form id="notificationSettingsForm">
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="toastNotificationsEnabled" />
+              <label class="form-check-label" for="toastNotificationsEnabled">
+                Показывать toast-уведомления в интерфейсе
+              </label>
+            </div>
+
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="eventRemindersEnabled" />
+              <label class="form-check-label" for="eventRemindersEnabled">
+                Показывать напоминания о ближайших мероприятиях
+              </label>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Сохранить настройки уведомлений</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script type="module" src="{{ url_for('static', filename='js/pages/settings.js') }}"></script>
+</body>
+</html>
+
+// app.py
+
+from flask import Flask
+from models import db
+
+from routes.pages import pages_bp
+from routes.auth import auth_bp
+from routes.events import events_bp
+from routes.attendees import attendees_bp
+from routes.chat import chat_bp
+from routes.polls import polls_bp
+from routes.profile import profile_bp
+
+app = Flask(__name__)
+
+app.config['SECRET_KEY'] = 'dev-secret-key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///eventplanner.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+app.register_blueprint(pages_bp)
+app.register_blueprint(auth_bp)
+app.register_blueprint(events_bp)
+app.register_blueprint(attendees_bp)
+app.register_blueprint(chat_bp)
+app.register_blueprint(polls_bp)
+app.register_blueprint(profile_bp)
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+
+    app.run(debug=True)
+
+// models.py
+
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+
+db = SQLAlchemy()
+
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    full_name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+
+
+class Event(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    date = db.Column(db.DateTime, nullable=False)
+    location = db.Column(db.String(255), nullable=False)
+    category = db.Column(db.String(50), nullable=False)
+    image = db.Column(db.String(255))
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+    invite_code = db.Column(db.String(50))
+
+    organizer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    organizer = db.relationship('User', backref='events')
+
+
+class EventAttendee(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    status = db.Column(db.String(20), nullable=False)
+
+    event = db.relationship('Event', backref='attendees')
+    user = db.relationship('User', backref='event_statuses')
+
+
+class ChatMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    text = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    event = db.relationship('Event', backref='chat_messages')
+    user = db.relationship('User', backref='chat_messages')
+
+
+class Poll(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    type = db.Column(db.String(50), nullable=False, default='custom')
+
+    event = db.relationship('Event', backref='polls')
+
+
+class PollOption(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    poll_id = db.Column(db.Integer, db.ForeignKey('poll.id'), nullable=False)
+    text = db.Column(db.String(255), nullable=False)
+
+    poll = db.relationship('Poll', backref='options')
+
+
+class PollVote(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    poll_id = db.Column(db.Integer, db.ForeignKey('poll.id'), nullable=False)
+    option_id = db.Column(db.Integer, db.ForeignKey('poll_option.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    poll = db.relationship('Poll', backref='votes')
+    option = db.relationship('PollOption')
+    user = db.relationship('User')
+
