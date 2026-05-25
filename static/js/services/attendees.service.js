@@ -40,3 +40,8 @@ export async function getJoinedEvents() {
 export async function deleteEventAttendees(eventId) {
   return { success: true };
 }
+
+export async function getEventAttendees(eventId) {
+  const response = await fetch(`/api/events/${eventId}/attendees`);
+  return await response.json();
+}

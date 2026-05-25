@@ -1,5 +1,9 @@
 import { getCurrentUser, logout } from '../core/auth.js';
 import { getUserInitials } from '../core/utils.js';
+import {
+  getNotifications,
+  markNotificationRead
+} from '../services/user-notifications.service.js';
 
 export async function loadNavbar() {
   try {
@@ -33,7 +37,45 @@ export async function updateNavbarUI() {
   if (user) {
     const initials = getUserInitials(user.fullName);
 
+    const notifications = await getNotifications();
+    const unreadCount = notifications.filter(item => !item.isRead).length;
+
     authNav.innerHTML = `
+      <div class="dropdown me-3">
+        <a
+          href="#"
+          class="notification-bell position-relative"
+          data-bs-toggle="dropdown"
+        >
+          <i class="bi bi-bell-fill"></i>
+
+          ${
+            unreadCount > 0
+              ? `<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">${unreadCount}</span>`
+              : ''
+          }
+        </a>
+
+        <ul class="dropdown-menu dropdown-menu-end" style="min-width: 320px; max-height: 400px; overflow-y: auto;">
+          ${
+            notifications.length === 0
+              ? `<li><span class="dropdown-item text-muted">Уведомлений нет</span></li>`
+              : notifications.map(item => `
+                  <li>
+                    <a
+                      href="${item.eventId ? `/event/${item.eventId}` : '#'}"
+                      class="dropdown-item notification-item ${item.isRead ? '' : 'fw-bold'}"
+                      data-id="${item.id}"
+                    >
+                      <div>${item.title}</div>
+                      <small class="text-muted">${item.message}</small>
+                    </a>
+                  </li>
+                `).join('')
+          }
+        </ul>
+      </div>
+
       <div class="dropdown">
         <a href="#" class="d-flex align-items-center text-decoration-none dropdown-toggle" data-bs-toggle="dropdown">
           <div class="user-avatar me-2">
@@ -51,6 +93,15 @@ export async function updateNavbarUI() {
       </div>
     `;
 
+    document.querySelectorAll('.notification-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.dataset.id;
+        if (id) {
+          await markNotificationRead(id);
+        }
+      });
+    });
+    
     document.getElementById('logoutBtn')?.addEventListener('click', async event => {
       event.preventDefault();
       await logout();

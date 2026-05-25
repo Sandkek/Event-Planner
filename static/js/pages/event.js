@@ -10,6 +10,7 @@ import {
 import { getEventById, deleteEvent } from '../services/events.service.js';
 import {
   deleteEventAttendees,
+  getEventAttendees,
   getGoingCount,
   getUserEventStatus,
   removeAttendeeStatus,
@@ -58,26 +59,56 @@ import { loadNavbar } from '../ui/navbar.js';
 async function renderAttendees(eventId, user) {
   const countEl = document.getElementById('attendeesCount');
   const container = document.getElementById('attendeesList');
+  const searchInput = document.getElementById('attendeesSearchInput');
 
   if (!countEl || !container) return;
 
-  const count = await getGoingCount(eventId);
+  const attendees = await getEventAttendees(eventId);
+  const count = attendees.length;
   countEl.textContent = count;
 
-  const userStatus = user ? await getUserEventStatus(eventId) : null;
+  const search = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+  const filteredAttendees = attendees.filter(item => {
+    return (
+      item.fullName.toLowerCase().includes(search) ||
+      item.email.toLowerCase().includes(search)
+    );
+  });
 
   if (count === 0) {
     container.innerHTML = '<p>Пока никто не записался.</p>';
     return;
   }
 
-  let html = `<p>Всего записано: ${count} человек`;
-  if (userStatus === 'going') {
-    html += ' (включая вас)';
+  if (filteredAttendees.length === 0) {
+    container.innerHTML = '<p class="text-muted">Участники не найдены.</p>';
+    return;
   }
-  html += '.</p>';
 
-  container.innerHTML = html;
+  container.innerHTML = filteredAttendees.map(item => {
+    const initials = item.fullName
+      .trim()
+      .split(/\s+/)
+      .map(part => part[0]?.toUpperCase())
+      .join('')
+      .slice(0, 2);
+
+    const isCurrentUser = user && item.email === user.email;
+
+    return `
+      <div class="d-flex align-items-center gap-2 border rounded px-3 py-2 mb-2">
+        <div class="attendee-avatar">${initials}</div>
+        <div>
+          <div class="fw-semibold">
+            ${item.fullName}
+            ${isCurrentUser ? '<span class="text-muted small">(вы)</span>' : ''}
+          </div>
+          <div class="text-muted small">${item.email}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderEventMap(event) {
@@ -456,6 +487,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderEventMap(event);
 
   await renderAttendees(eventId, user);
+  document.getElementById('attendeesSearchInput')?.addEventListener('input', async () => {
+    await renderAttendees(eventId, user);
+  });
+  
   await renderChat(event, eventId, user);
   await updateRsvpButtons(event, eventId, user);
   await renderPolls(event, eventId, user);

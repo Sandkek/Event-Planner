@@ -10,7 +10,8 @@ import {
 
 const DEFAULT_SETTINGS = {
   toastNotificationsEnabled: true,
-  eventRemindersEnabled: true
+  eventRemindersEnabled: true,
+  emailNotificationsEnabled: true
 };
 
 function fillProfileForm(user) {
@@ -18,12 +19,32 @@ function fillProfileForm(user) {
   document.getElementById('email').value = user.email || '';
 }
 
-function fillNotificationForm(settings) {
+function fillNotificationForm(user) {
   document.getElementById('toastNotificationsEnabled').checked =
-    settings.toastNotificationsEnabled;
+    DEFAULT_SETTINGS.toastNotificationsEnabled;
 
   document.getElementById('eventRemindersEnabled').checked =
-    settings.eventRemindersEnabled;
+    DEFAULT_SETTINGS.eventRemindersEnabled;
+
+  const emailNotificationsInput =
+    document.getElementById('emailNotificationsEnabled');
+
+  if (emailNotificationsInput) {
+    emailNotificationsInput.checked =
+      user.emailNotificationsEnabled ?? true;
+  }
+}
+
+async function updateNotificationSettings(data) {
+  const response = await fetch('/api/profile/notifications', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(data)
+  });
+
+  return await response.json();
 }
 
 function setupPasswordValidation() {
@@ -49,7 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!currentUser) return;
 
   fillProfileForm(currentUser);
-  fillNotificationForm(DEFAULT_SETTINGS);
+  fillNotificationForm(currentUser);
   setupPasswordValidation();
 
   const profileForm = document.getElementById('profileSettingsForm');
@@ -89,7 +110,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    currentUser = result.user;
+    currentUser = {
+      ...currentUser,
+      ...result.user
+    };
+
     notifySuccess('Профиль успешно обновлён.');
   });
 
@@ -119,11 +144,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     notifySuccess('Пароль успешно обновлён.');
   });
 
-  notificationForm.addEventListener('submit', event => {
+  notificationForm.addEventListener('submit', async event => {
     event.preventDefault();
 
-    // Пока настройки уведомлений оставляем локально на странице.
-    // Основные данные профиля и пароль уже работают через сервер.
+    const emailNotificationsInput =
+      document.getElementById('emailNotificationsEnabled');
+
+    const result = await updateNotificationSettings({
+      emailNotificationsEnabled:
+        emailNotificationsInput
+          ? emailNotificationsInput.checked
+          : true
+    });
+
+    if (!result.success) {
+      notifyError('Не удалось сохранить настройки уведомлений.');
+      return;
+    }
+
+    currentUser.emailNotificationsEnabled =
+      emailNotificationsInput
+        ? emailNotificationsInput.checked
+        : true;
+
     notifySuccess('Настройки уведомлений сохранены.');
   });
 });

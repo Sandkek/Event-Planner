@@ -10,6 +10,11 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
 
+    email_notifications_enabled = db.Column(
+        db.Boolean,
+        default=True
+    )
+
 
 class Event(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -81,3 +86,19 @@ class PollVote(db.Model):
     poll = db.relationship('Poll', backref='votes')
     option = db.relationship('PollOption')
     user = db.relationship('User')
+
+
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=True)
+
+    title = db.Column(db.String(255), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='notifications')
+    event = db.relationship('Event')

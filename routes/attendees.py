@@ -1,5 +1,5 @@
 from flask import Blueprint, request, session, jsonify
-from models import db, EventAttendee
+from models import db, EventAttendee, User
 
 attendees_bp = Blueprint('attendees', __name__)
 
@@ -112,3 +112,21 @@ def api_get_going_count(event_id):
     ).count()
 
     return jsonify({'count': count})
+
+
+@attendees_bp.route('/api/events/<int:event_id>/attendees')
+def api_get_event_attendees(event_id):
+    attendees = EventAttendee.query.filter_by(
+        event_id=event_id,
+        status='going'
+    ).all()
+
+    return jsonify([
+        {
+            'id': item.user.id,
+            'fullName': item.user.full_name,
+            'email': item.user.email,
+            'status': item.status
+        }
+        for item in attendees
+    ])

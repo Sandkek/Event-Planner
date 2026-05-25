@@ -124,6 +124,32 @@
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
+/* .notification-bell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 38px;
+    height: 38px;
+
+    border-radius: 50%;
+    text-decoration: none;
+
+    color: #495057;
+    background: transparent;
+
+    transition: background-color 0.2s ease;
+}
+
+.notification-bell:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: #212529;
+}
+
+.notification-bell::after {
+    display: none !important;
+} */
+
 @media (max-width: 576px) {
   .hero h1 { font-size: 1.75rem; }
   .container .form-select {

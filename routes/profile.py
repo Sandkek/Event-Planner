@@ -76,3 +76,22 @@ def api_update_password():
     db.session.commit()
 
     return jsonify({'success': True})
+
+@profile_bp.route('/api/profile/notifications', methods=['PUT'])
+def api_update_notification_settings():
+    user_id = session.get('user_id')
+
+    if not user_id:
+        return jsonify({'success': False}), 401
+
+    user = User.query.get_or_404(user_id)
+    data = request.get_json()
+
+    user.email_notifications_enabled = data.get(
+        'emailNotificationsEnabled',
+        True
+    )
+
+    db.session.commit()
+
+    return jsonify({'success': True})

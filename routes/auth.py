@@ -5,6 +5,15 @@ from models import db, User
 auth_bp = Blueprint('auth', __name__)
 
 
+def serialize_user(user):
+    return {
+        'id': user.id,
+        'fullName': user.full_name,
+        'email': user.email,
+        'emailNotificationsEnabled': user.email_notifications_enabled
+    }
+
+
 @auth_bp.route('/api/register', methods=['POST'])
 def api_register():
     data = request.get_json()
@@ -27,7 +36,8 @@ def api_register():
     user = User(
         full_name=full_name,
         email=email,
-        password_hash=generate_password_hash(password)
+        password_hash=generate_password_hash(password),
+        email_notifications_enabled=True
     )
 
     db.session.add(user)
@@ -37,11 +47,7 @@ def api_register():
 
     return jsonify({
         'success': True,
-        'user': {
-            'id': user.id,
-            'fullName': user.full_name,
-            'email': user.email
-        }
+        'user': serialize_user(user)
     })
 
 
@@ -64,11 +70,7 @@ def api_login():
 
     return jsonify({
         'success': True,
-        'user': {
-            'id': user.id,
-            'fullName': user.full_name,
-            'email': user.email
-        }
+        'user': serialize_user(user)
     })
 
 
@@ -92,9 +94,15 @@ def api_current_user():
         return jsonify({'user': None})
 
     return jsonify({
-        'user': {
-            'id': user.id,
-            'fullName': user.full_name,
-            'email': user.email
-        }
+        'user': serialize_user(user)
     })
+
+
+@auth_bp.route('/api/debug/users')
+def api_debug_users():
+    users = User.query.all()
+
+    return jsonify([
+        serialize_user(user)
+        for user in users
+    ])
