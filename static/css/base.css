@@ -135,3 +135,24 @@ body {
 .notification-bell::after {
     display: none !important;
 }
+
+.app-navbar {
+    position: sticky;
+    top: 0;
+    z-index: 1050;
+}
+
+.app-footer {
+    margin-top: 80px;
+    background: #f8f9fa;
+    border-top: 1px solid #dee2e6;
+}
+
+.app-footer a {
+    text-decoration: none;
+    color: #495057;
+}
+
+.app-footer a:hover {
+    color: #0d6efd;
+}

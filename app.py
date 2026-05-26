@@ -9,6 +9,7 @@ from routes.chat import chat_bp
 from routes.polls import polls_bp
 from routes.profile import profile_bp
 from routes.notifications import notifications_bp
+from routes.admin import admin_bp
 
 from dotenv import load_dotenv
 
@@ -52,6 +53,7 @@ app.register_blueprint(chat_bp)
 app.register_blueprint(polls_bp)
 app.register_blueprint(profile_bp)
 app.register_blueprint(notifications_bp)
+app.register_blueprint(admin_bp)
 
 
 @app.route('/favicon.ico')

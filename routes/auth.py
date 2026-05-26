@@ -10,7 +10,8 @@ def serialize_user(user):
         'id': user.id,
         'fullName': user.full_name,
         'email': user.email,
-        'emailNotificationsEnabled': user.email_notifications_enabled
+        'emailNotificationsEnabled': user.email_notifications_enabled,
+        'isAdmin': user.is_admin
     }
 
 

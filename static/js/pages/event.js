@@ -55,8 +55,9 @@ import {
   setupPollOptionsPreview
 } from '../ui/polls.js';
 import { loadNavbar } from '../ui/navbar.js';
+import { loadFooter } from '../ui/footer.js';
 
-async function renderAttendees(eventId, user) {
+async function renderAttendees(eventId, user, event = null) {
   const countEl = document.getElementById('attendeesCount');
   const container = document.getElementById('attendeesList');
   const searchInput = document.getElementById('attendeesSearchInput');
@@ -64,51 +65,142 @@ async function renderAttendees(eventId, user) {
   if (!countEl || !container) return;
 
   const attendees = await getEventAttendees(eventId);
-  const count = attendees.length;
-  countEl.textContent = count;
 
-  const search = searchInput ? searchInput.value.trim().toLowerCase() : '';
+  const goingAttendees = attendees.filter(item => item.status === 'going');
+  countEl.textContent = goingAttendees.length;
 
-  const filteredAttendees = attendees.filter(item => {
-    return (
-      item.fullName.toLowerCase().includes(search) ||
-      item.email.toLowerCase().includes(search)
-    );
-  });
+  const isOrganizer =
+    event && user && event.organizerEmail === user.email;
 
-  if (count === 0) {
-    container.innerHTML = '<p>Пока никто не записался.</p>';
+  const search = searchInput
+    ? searchInput.value.trim().toLowerCase()
+    : '';
+
+  let visibleAttendees = isOrganizer
+    ? attendees
+    : goingAttendees;
+
+  if (search) {
+    visibleAttendees = visibleAttendees.filter(item => {
+      return (
+        item.fullName.toLowerCase().includes(search) ||
+        item.email.toLowerCase().includes(search)
+      );
+    });
+  }
+
+  if (attendees.length === 0) {
+    container.innerHTML = '<p>Пока никто не указал статус участия.</p>';
     return;
   }
 
-  if (filteredAttendees.length === 0) {
+  if (visibleAttendees.length === 0) {
     container.innerHTML = '<p class="text-muted">Участники не найдены.</p>';
     return;
   }
 
-  container.innerHTML = filteredAttendees.map(item => {
-    const initials = item.fullName
+  function getInitials(fullName) {
+    return fullName
       .trim()
       .split(/\s+/)
       .map(part => part[0]?.toUpperCase())
       .join('')
       .slice(0, 2);
+  }
 
+  function getStatusLabel(status) {
+    const labels = {
+      going: 'Пойду',
+      interested: 'Может быть',
+      'not-going': 'Не пойду'
+    };
+
+    return labels[status] || status;
+  }
+
+  function getStatusClass(status) {
+    const classes = {
+      going: 'bg-success',
+      interested: 'bg-warning text-dark',
+      'not-going': 'bg-secondary'
+    };
+
+    return classes[status] || 'bg-secondary';
+  }
+
+  function renderParticipantCard(item) {
+    const initials = getInitials(item.fullName);
     const isCurrentUser = user && item.email === user.email;
 
     return `
-      <div class="d-flex align-items-center gap-2 border rounded px-3 py-2 mb-2">
-        <div class="attendee-avatar">${initials}</div>
-        <div>
-          <div class="fw-semibold">
-            ${item.fullName}
-            ${isCurrentUser ? '<span class="text-muted small">(вы)</span>' : ''}
+      <div class="d-flex align-items-center justify-content-between gap-2 border rounded px-3 py-2 mb-2">
+        <div class="d-flex align-items-center gap-2">
+          <div class="attendee-avatar">${initials}</div>
+          <div>
+            <div class="fw-semibold">
+              ${item.fullName}
+              ${isCurrentUser ? '<span class="text-muted small">(вы)</span>' : ''}
+            </div>
+            <div class="text-muted small">${item.email}</div>
           </div>
-          <div class="text-muted small">${item.email}</div>
         </div>
+
+        ${
+          isOrganizer
+            ? `<span class="badge ${getStatusClass(item.status)}">${getStatusLabel(item.status)}</span>`
+            : ''
+        }
       </div>
     `;
-  }).join('');
+  }
+
+  if (!isOrganizer) {
+    if (goingAttendees.length === 0) {
+      container.innerHTML = '<p>Пока никто не записался.</p>';
+      return;
+    }
+
+    container.innerHTML = visibleAttendees
+      .map(renderParticipantCard)
+      .join('');
+
+    return;
+  }
+
+  const grouped = {
+    going: visibleAttendees.filter(item => item.status === 'going'),
+    interested: visibleAttendees.filter(item => item.status === 'interested'),
+    notGoing: visibleAttendees.filter(item => item.status === 'not-going')
+  };
+
+  container.innerHTML = `
+    <div class="mb-3">
+      <h5 class="mb-2">Пойду (${grouped.going.length})</h5>
+      ${
+        grouped.going.length
+          ? grouped.going.map(renderParticipantCard).join('')
+          : '<p class="text-muted">Нет участников.</p>'
+      }
+    </div>
+
+    <div class="mb-3">
+      <h5 class="mb-2">Может быть (${grouped.interested.length})</h5>
+      ${
+        grouped.interested.length
+          ? grouped.interested.map(renderParticipantCard).join('')
+          : '<p class="text-muted">Нет участников.</p>'
+      }
+    </div>
+
+    <div class="mb-3">
+      <h5 class="mb-2">Не пойду (${grouped.notGoing.length})</h5>
+      ${
+        grouped.notGoing.length
+          ? grouped.notGoing.map(renderParticipantCard).join('')
+          : '<p class="text-muted">Нет участников.</p>'
+      }
+    </div>
+  `;
 }
 
 function renderEventMap(event) {
@@ -424,7 +516,7 @@ async function renderInviteSection(event, eventId, user) {
           await setAttendeeStatus(eventId, null, 'going');
           notifySuccess('Приглашение принято. Вы записаны на мероприятие.');
 
-          await renderAttendees(eventId, user);
+          await renderAttendees(eventId, user, event);
           await renderChat(event, eventId, user);
           await updateRsvpButtons(event, eventId, user);
           await renderPolls(event, eventId, user);
@@ -449,6 +541,7 @@ async function renderInviteSection(event, eventId, user) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadNavbar();
+  await loadFooter();
 
   const user = await requireAuth();
   if (!user) return;
@@ -486,9 +579,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   renderEventMap(event);
 
-  await renderAttendees(eventId, user);
+  await renderAttendees(eventId, user, event);
   document.getElementById('attendeesSearchInput')?.addEventListener('input', async () => {
-    await renderAttendees(eventId, user);
+    await renderAttendees(eventId, user, event);
   });
   
   await renderChat(event, eventId, user);
@@ -520,7 +613,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         notifySuccess(`Ваш статус: ${labels[newStatus] || newStatus}`);
       }
 
-      await renderAttendees(eventId, user);
+      await renderAttendees(eventId, user, event);
       await renderChat(event, eventId, user);
       await updateRsvpButtons(event, eventId, user);
       await renderPolls(event, eventId, user);

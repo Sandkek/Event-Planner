@@ -26,13 +26,20 @@ def serialize_event(event):
 
 @events_bp.route('/api/events')
 def api_get_events():
-    events = Event.query.order_by(Event.date).all()
+    events = Event.query.filter_by(is_blocked=False).order_by(Event.date).all()
     return jsonify([serialize_event(event) for event in events])
 
 
 @events_bp.route('/api/events/<int:event_id>')
 def api_get_event(event_id):
     event = Event.query.get_or_404(event_id)
+
+    if event.is_blocked:
+        return jsonify({
+            'success': False,
+            'message': 'Мероприятие заблокировано администратором.'
+        }), 403
+
     return jsonify(serialize_event(event))
 
 

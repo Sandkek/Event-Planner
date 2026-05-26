@@ -99,7 +99,11 @@ def api_my_joined_events():
         status='going'
     ).all()
 
-    events = [item.event for item in attendees]
+    events = [
+        item.event
+        for item in attendees
+        if not item.event.is_blocked
+    ]
 
     return jsonify([serialize_event(event) for event in events])
 
@@ -117,8 +121,7 @@ def api_get_going_count(event_id):
 @attendees_bp.route('/api/events/<int:event_id>/attendees')
 def api_get_event_attendees(event_id):
     attendees = EventAttendee.query.filter_by(
-        event_id=event_id,
-        status='going'
+        event_id=event_id
     ).all()
 
     return jsonify([

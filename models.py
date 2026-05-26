@@ -14,6 +14,7 @@ class User(db.Model):
         db.Boolean,
         default=True
     )
+    is_admin = db.Column(db.Boolean, default=False)
 
 
 class Event(db.Model):
@@ -27,10 +28,11 @@ class Event(db.Model):
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     invite_code = db.Column(db.String(50))
+    is_blocked = db.Column(db.Boolean, default=False)
 
     organizer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     organizer = db.relationship('User', backref='events')
-
+    
 
 class EventAttendee(db.Model):
     id = db.Column(db.Integer, primary_key=True)

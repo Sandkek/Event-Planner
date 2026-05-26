@@ -10,6 +10,7 @@ import {
 } from '../ui/event-form.js';
 import { generateInviteCode } from '../services/invite.service.js';
 import { loadNavbar } from '../ui/navbar.js';
+import { loadFooter } from '../ui/footer.js';
 
 
 function setupLocationMap() {
@@ -99,6 +100,7 @@ async function reverseGeocode(lat, lng) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadNavbar();
+  await loadFooter();
 
   const user = await requireUser();
   if (!user) return;

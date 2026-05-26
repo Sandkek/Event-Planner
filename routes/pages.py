@@ -34,8 +34,6 @@ def create_event():
 
 @pages_bp.route('/event/<int:event_id>')
 def event_detail(event_id):
-    if 'user_id' not in session:
-        return redirect('/login')
     return render_template('event.html')
 
 

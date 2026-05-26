@@ -6,6 +6,7 @@ import { getAllEvents } from '../services/events.service.js';
 import { getJoinedEvents } from '../services/attendees.service.js';
 import { canManageEvent } from '../services/event-permissions.js';
 import { loadNavbar } from '../ui/navbar.js';
+import { loadFooter } from '../ui/footer.js';
 import { getGroupedReminders } from '../services/reminders.service.js';
 import { renderRemindersBlock } from '../ui/reminders.js';
 
@@ -74,6 +75,7 @@ async function renderProfileReminders(user) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadNavbar();
+  await loadFooter();
 
   const user = await requireAuth();
   if (!user) return;

@@ -3,6 +3,7 @@
 import { requireAuth } from '../core/auth.js';
 import { notifyError, notifySuccess } from '../services/notifications.service.js';
 import { loadNavbar } from '../ui/navbar.js';
+import { loadFooter } from '../ui/footer.js';
 import {
   updateProfile,
   updatePassword
@@ -65,6 +66,7 @@ function setupPasswordValidation() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadNavbar();
+  await loadFooter();
 
   let currentUser = await requireAuth();
   if (!currentUser) return;

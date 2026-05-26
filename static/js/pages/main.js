@@ -9,6 +9,7 @@ import {
 } from '../services/attendees.service.js';
 import { renderEventCard } from '../ui/event-card.js';
 import { loadNavbar } from '../ui/navbar.js';
+import { loadFooter } from '../ui/footer.js';
 import {
   notify,
   notifySuccess
@@ -111,6 +112,7 @@ function setupRsvpHandler() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadNavbar();
+  await loadFooter();
   await updateCreateButton();
 
   document.getElementById('searchInput')?.addEventListener('input', applyFilters);

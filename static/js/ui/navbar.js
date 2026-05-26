@@ -16,7 +16,7 @@ export async function loadNavbar() {
     console.error('Не удалось загрузить navbar:', error);
 
     document.body.insertAdjacentHTML('afterbegin', `
-      <nav class="navbar navbar-expand-lg app-navbar">
+      <nav class="navbar navbar-expand-lg app-navbar sticky-top">
         <div class="container">
           <a class="navbar-brand" href="/">EventPlanner</a>
           <div class="d-flex align-items-center" id="authNav"></div>

@@ -4,6 +4,7 @@ import { loadNavbar } from '../ui/navbar.js';
 import { getAllEvents } from '../services/events.service.js';
 import { requireUser } from '../core/guards.js';
 import { getUserEventStatus } from '../services/attendees.service.js';
+import { loadFooter } from '../ui/footer.js';
 
 function filterEvents(events, user, filters) {
   return events.filter(event => {
