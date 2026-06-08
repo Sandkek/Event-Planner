@@ -18,7 +18,7 @@ export async function loadNavbar() {
     document.body.insertAdjacentHTML('afterbegin', `
       <nav class="navbar navbar-expand-lg app-navbar sticky-top">
         <div class="container">
-          <a class="navbar-brand" href="/">EventPlanner</a>
+          <a class="navbar-brand" href="/">Соберёмся</a>
           <div class="d-flex align-items-center" id="authNav"></div>
         </div>
       </nav>

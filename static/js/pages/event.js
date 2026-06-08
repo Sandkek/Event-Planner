@@ -563,7 +563,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  document.getElementById('pageTitle').textContent = `${event.title} — EventPlanner`;
+  document.getElementById('pageTitle').textContent = `${event.title} — Соберёмся`;
   document.getElementById('eventTitle').textContent = event.title;
   document.getElementById('eventDate').textContent = formatFullDate(event.date);
   document.getElementById('eventLocation').textContent = event.location;
